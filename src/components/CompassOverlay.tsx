@@ -15,6 +15,8 @@ type CompassOverlayProps = {
 export function CompassOverlay({ dir }: CompassOverlayProps) {
   // 方角コードを針回転角度（度）へ変換する表。
   const angleMap: Record<Direction, number> = { N: 0, E: 90, S: 180, W: 270 };
+  // コンパス背景の黒色。
+  const compassBackground = '#000000';
 
   return (
     <div
@@ -32,6 +34,7 @@ export function CompassOverlay({ dir }: CompassOverlayProps) {
       }}
     >
       <svg width={78} height={78} viewBox="0 0 78 78" aria-label="compass">
+        <circle cx="39" cy="39" r="28" fill={compassBackground} fillOpacity="0.84" />
         <circle cx="39" cy="39" r="22" fill="none" stroke="#58d47f" strokeOpacity="0.72" strokeWidth="1.2" />
         <line x1="39" y1="17" x2="39" y2="61" stroke="#58d47f" strokeOpacity="0.34" strokeWidth="1" />
         <line x1="17" y1="39" x2="61" y2="39" stroke="#58d47f" strokeOpacity="0.34" strokeWidth="1" />

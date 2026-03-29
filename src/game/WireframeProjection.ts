@@ -1,4 +1,5 @@
 import { Cell, Maze, PlayerState } from '../mazeUtils';
+import { Checkpoint, toCheckpointKey } from './checkpointUtils';
 import { GOAL, START } from './constants';
 import { LEFT_OF, RIGHT_OF } from './playerActions';
 
@@ -28,12 +29,23 @@ export type WireFace = {
   depth: number;
 };
 
+// 床ハイライトポリゴンの描画情報。
+export type FloorPatch = {
+  points: string;
+  fill: string;
+  depth: number;
+  part: string;
+};
+
 // スタート/ゴールのマーカー描画情報。
 export type Marker = {
   x: number;
   y: number;
   size: number;
-  label: 'S' | 'G';
+  label: 'S' | 'G' | 'C';
+  checkpointNumber?: number;
+  goalActive?: boolean;
+  checkpointPassed?: boolean;
 };
 
 // デバッグ出力用のセル壁情報（範囲外はnull）。
@@ -57,6 +69,7 @@ export type WallJudgement = {
 export type WireframeProjection = {
   lines: WireLine[];
   faces: WireFace[];
+  floorPatches: FloorPatch[];
   markers: Marker[];
   wallJudgements: WallJudgement[];
 };
@@ -86,20 +99,42 @@ class WireframeProjectionBuilder {
   private readonly lines: WireLine[] = [];
   // 描画対象の面バッファ。
   private readonly faces: WireFace[] = [];
-  // 描画対象のS/Gマーカーバッファ。
+  // 描画対象のS/G/Cマーカーバッファ。
   private readonly markers: Marker[] = [];
+  // 描画対象の床ハイライトバッファ。
+  private readonly floorPatches: FloorPatch[] = [];
   // 判定デバッグの記録バッファ。
   private readonly wallJudgements: WallJudgement[] = [];
+  // チェックポイント存在判定用のキー集合。
+  private readonly checkpointKeySet: Set<string>;
+  // 座標キーからチェックポイント番号を引くための表。
+  private readonly checkpointNumberMap: Map<string, number>;
 
   /**
    * 投影生成器を初期化する。
    * @param maze 投影対象の迷路データ
    * @param player 投影基準となるプレイヤー状態
+   * @param checkpoints 全チェックポイント座標
+   * @param passedCheckpointKeys 通過済みチェックポイント座標キー集合
+   * @param goalActive ゴール有効化状態
    */
   constructor(
     private readonly maze: Maze,
-    private readonly player: PlayerState
-  ) {}
+    private readonly player: PlayerState,
+    private readonly checkpoints: Checkpoint[],
+    private readonly passedCheckpointKeys: Set<string>,
+    private readonly goalActive: boolean
+  ) {
+    this.checkpointKeySet = new Set(
+      checkpoints.map((checkpoint) => toCheckpointKey(checkpoint.x, checkpoint.y))
+    );
+    this.checkpointNumberMap = new Map(
+      checkpoints.map((checkpoint) => [
+        toCheckpointKey(checkpoint.x, checkpoint.y),
+        checkpoint.id,
+      ])
+    );
+  }
 
   /**
    * 迷路状態から3Dワイヤーフレーム描画データを生成する。
@@ -136,6 +171,7 @@ class WireframeProjectionBuilder {
       const centerX = (farFrame.left + farFrame.right) / 2;
       const centerY = farFrame.bottom - (farFrame.bottom - farFrame.top) * 0.38;
       const centerSize = Math.max(8, 16 - depth * 2.2);
+      this.pushCenterFloorPatch(cell, nearFrame, farFrame, depth);
       this.pushMarkerForCell(cell, centerX, centerY, centerSize);
 
       // 現在セルと左右隣接セルの壁情報から可視判定を作る。
@@ -163,7 +199,7 @@ class WireframeProjectionBuilder {
           actions.push('drawSideWall(left)');
         }
         if (shouldDrawLeftSideFront) {
-          const markerPoint = this.drawSideFrontWall('left', nearFrame, farFrame, depth, depth === 0);
+          const markerPoint = this.drawSideFrontWall('left', farFrame, depth);
           this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize);
           actions.push('drawSideFrontWall(left)');
         }
@@ -172,7 +208,7 @@ class WireframeProjectionBuilder {
           actions.push('drawSideWall(right)');
         }
         if (shouldDrawRightSideFront) {
-          const markerPoint = this.drawSideFrontWall('right', nearFrame, farFrame, depth, depth === 0);
+          const markerPoint = this.drawSideFrontWall('right', farFrame, depth);
           this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize);
           actions.push('drawSideFrontWall(right)');
         }
@@ -206,7 +242,7 @@ class WireframeProjectionBuilder {
         actions.push('drawSideWall(left)');
       }
       if (shouldDrawLeftSideFront) {
-        const markerPoint = this.drawSideFrontWall('left', nearFrame, farFrame, depth, depth === 0);
+        const markerPoint = this.drawSideFrontWall('left', farFrame, depth);
         this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize);
         actions.push('drawSideFrontWall(left)');
       }
@@ -215,7 +251,7 @@ class WireframeProjectionBuilder {
         actions.push('drawSideWall(right)');
       }
       if (shouldDrawRightSideFront) {
-        const markerPoint = this.drawSideFrontWall('right', nearFrame, farFrame, depth, depth === 0);
+        const markerPoint = this.drawSideFrontWall('right', farFrame, depth);
         this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize);
         actions.push('drawSideFrontWall(right)');
       }
@@ -247,6 +283,7 @@ class WireframeProjectionBuilder {
     return {
       lines: this.lines,
       faces: this.faces,
+      floorPatches: this.floorPatches,
       markers: this.markers,
       wallJudgements: this.wallJudgements,
     };
@@ -302,6 +339,17 @@ class WireframeProjectionBuilder {
   }
 
   /**
+   * 床ハイライトをバッファへ追加する。
+   * @param points ポリゴン頂点文字列（x,yの空白区切り）
+   * @param fill 塗り色
+   * @param depth 奥行き深度
+   * @param part デバッグ識別名
+   */
+  private pushFloorPatch(points: string, fill: string, depth: number, part: string) {
+    this.floorPatches.push({ points, fill, depth, part });
+  }
+
+  /**
    * 正面壁（矩形）を描画する。
    * @param frame 描画対象フレーム
    * @param depth 奥行き深度
@@ -316,6 +364,48 @@ class WireframeProjectionBuilder {
     this.pushLine(frame.left, frame.bottom, frame.right, frame.bottom, 2.2, 'front-bottom');
     this.pushLine(frame.left, frame.top, frame.left, frame.bottom, 2.2, 'front-left');
     this.pushLine(frame.right, frame.top, frame.right, frame.bottom, 2.2, 'front-right');
+  }
+
+  /**
+   * 対象セルの属性に応じて床色を返す。
+   * @param cell 判定対象セル
+   * @returns 床色。対象外セルはnull
+   */
+  private getCellFloorColor(cell: Cell | null): string | null {
+    if (!cell) return null;
+    if (cell.x === START.x && cell.y === START.y) return 'rgba(140, 230, 255, 0.24)';
+    if (cell.x === GOAL.x && cell.y === GOAL.y) {
+      return this.goalActive ? 'rgba(203, 255, 217, 0.24)' : 'rgba(255, 159, 159, 0.24)';
+    }
+    const checkpointKey = toCheckpointKey(cell.x, cell.y);
+    if (this.checkpointKeySet.has(checkpointKey)) {
+      return this.passedCheckpointKeys.has(checkpointKey)
+        ? 'rgba(123, 181, 138, 0.24)'
+        : 'rgba(255, 217, 140, 0.24)';
+    }
+    return null;
+  }
+
+  /**
+   * 中央通路の床へ対象セル色のハイライトを描画する。
+   * @param cell 対象セル
+   * @param nearFrame 手前フレーム
+   * @param farFrame 奥フレーム
+   * @param depth 奥行き深度
+   */
+  private pushCenterFloorPatch(cell: Cell | null, nearFrame: Frame, farFrame: Frame, depth: number) {
+    const floorColor = this.getCellFloorColor(cell);
+    if (!floorColor) return;
+    const nearInset = (nearFrame.right - nearFrame.left) * 0.16;
+    const farInset = (farFrame.right - farFrame.left) * 0.16;
+    const nearY = nearFrame.bottom - 3;
+    const farY = farFrame.bottom - 3;
+    this.pushFloorPatch(
+      `${nearFrame.left + nearInset},${nearY} ${nearFrame.right - nearInset},${nearY} ${farFrame.right - farInset},${farY} ${farFrame.left + farInset},${farY}`,
+      floorColor,
+      depth,
+      'center-floor-highlight'
+    );
   }
 
   /**
@@ -362,26 +452,16 @@ class WireframeProjectionBuilder {
   /**
    * 側面先に見える正面壁（独立矩形）を描画する。
    * @param side 描画対象側（left/right）
-   * @param nearFrame 手前フレーム
    * @param farFrame 奥フレーム
    * @param depth 奥行き深度
-   * @param flushToCanvas 最外側辺を画面端に吸着するか
    * @returns マーカー配置に使う矩形中心座標
    */
-  private drawSideFrontWall(
-    side: 'left' | 'right',
-    nearFrame: Frame,
-    farFrame: Frame,
-    depth: number,
-    flushToCanvas = false
-  ) {
+  private drawSideFrontWall(side: 'left' | 'right', farFrame: Frame, depth: number) {
     const partPrefix = `${side}-side-front-wall`;
     const innerX = side === 'left' ? farFrame.left : farFrame.right;
-    const span = Math.max(34, Math.abs(nearFrame.left - farFrame.left) * 2.1);
-    const unclampedOuterX = side === 'left' ? innerX - span : innerX + span;
-    const outerX = flushToCanvas
-      ? (side === 'left' ? 2 : VIEWPORT_WIDTH - 2)
-      : Math.max(2, Math.min(VIEWPORT_WIDTH - 2, unclampedOuterX));
+    // 左右マスの正面壁幅は同奥行きの中央正面壁幅と一致させる。
+    const centerFrontWidth = farFrame.right - farFrame.left;
+    const outerX = side === 'left' ? innerX - centerFrontWidth : innerX + centerFrontWidth;
 
     this.pushFace(
       `${innerX},${farFrame.top} ${outerX},${farFrame.top} ${outerX},${farFrame.bottom} ${innerX},${farFrame.bottom}`,
@@ -400,7 +480,7 @@ class WireframeProjectionBuilder {
   }
 
   /**
-   * セルがスタート/ゴールなら対応マーカーを追加する。
+   * セルがスタート/ゴール/チェックポイントなら対応マーカーを追加する。
    * @param cell 判定対象セル
    * @param x マーカー中心X
    * @param y マーカー中心Y
@@ -409,7 +489,22 @@ class WireframeProjectionBuilder {
   private pushMarkerForCell(cell: Cell | null, x: number, y: number, size: number) {
     if (!cell) return;
     if (cell.x === START.x && cell.y === START.y) this.markers.push({ x, y, size, label: 'S' });
-    if (cell.x === GOAL.x && cell.y === GOAL.y) this.markers.push({ x, y, size, label: 'G' });
+    if (cell.x === GOAL.x && cell.y === GOAL.y) {
+      this.markers.push({ x, y, size, label: 'G', goalActive: this.goalActive });
+    }
+    const checkpointKey = toCheckpointKey(cell.x, cell.y);
+    const isCheckpoint = this.checkpointKeySet.has(checkpointKey);
+    if (isCheckpoint) {
+      const checkpointNumber = this.checkpointNumberMap.get(checkpointKey);
+      this.markers.push({
+        x,
+        y,
+        size: Math.max(6, size - 1),
+        label: 'C',
+        checkpointNumber,
+        checkpointPassed: this.passedCheckpointKeys.has(checkpointKey),
+      });
+    }
   }
 
   /**
@@ -427,7 +522,22 @@ class WireframeProjectionBuilder {
  * 3D描画用の投影データを生成する。
  * @param maze 投影元の迷路データ
  * @param player 投影基準のプレイヤー状態
+ * @param checkpoints 全チェックポイント座標
+ * @param passedCheckpointKeys 通過済みチェックポイント座標キー集合
+ * @param goalActive ゴール有効化状態
  * @returns 描画で直接使える投影結果
  */
-export const createWireframeProjection = (maze: Maze, player: PlayerState): WireframeProjection =>
-  new WireframeProjectionBuilder(maze, player).build();
+export const createWireframeProjection = (
+  maze: Maze,
+  player: PlayerState,
+  checkpoints: Checkpoint[],
+  passedCheckpointKeys: Set<string>,
+  goalActive: boolean
+): WireframeProjection =>
+  new WireframeProjectionBuilder(
+    maze,
+    player,
+    checkpoints,
+    passedCheckpointKeys,
+    goalActive
+  ).build();

@@ -1,9 +1,9 @@
 import { Direction } from '../mazeUtils';
 
 // 迷路の横マス数。表示難易度の基準値。
-export const MAZE_WIDTH = 30;
+export const MAZE_WIDTH = 15;
 // 迷路の縦マス数。表示難易度の基準値。
-export const MAZE_HEIGHT = 10;
+export const MAZE_HEIGHT = 15;
 
 // プレイヤー開始位置。
 export const START = { x: 0, y: 0 } as const;

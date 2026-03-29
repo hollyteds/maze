@@ -9,6 +9,7 @@
 - `src/components/HelpMap.tsx`
 - `src/components/CompassOverlay.tsx`
 - `src/game/WireframeProjection.ts`
+- `src/game/checkpointUtils.ts`
 - `src/game/playerActions.ts`
 - `src/game/constants.ts`
 - `src/mazeUtils.ts`
@@ -18,8 +19,9 @@
 | レイヤ | 主ファイル | 役割 |
 |---|---|---|
 | 画面構成 | `src/MazeGame.tsx` | コンポーネント配置、表示制御 |
-| 状態/入力 | `src/hooks/useMazeGameController.ts` | キー入力、タイマー、ゴール判定、リトライ |
+| 状態/入力 | `src/hooks/useMazeGameController.ts` | キー入力、タイマー、チェックポイント通過管理、ゴール判定、リトライ |
 | 3D投影ロジック | `src/game/WireframeProjection.ts` | 疑似透視の線・面・マーカー生成 |
+| チェックポイント生成 | `src/game/checkpointUtils.ts` | チェックポイント数算出とランダム配置 |
 | 描画コンポーネント | `src/components/MazeView3D.tsx` ほか | 受け取ったデータをSVGとして描画 |
 | プレイヤー移動ロジック | `src/game/playerActions.ts` | 回転・前進判定 |
 | 共通定数 | `src/game/constants.ts` | 迷路サイズ、S/G座標、方角ラベル |
@@ -32,6 +34,7 @@ flowchart TD
   A[アプリ起動] --> B[MazeGame描画]
   B --> C[useMazeGameController初期化]
   C --> D[generateMazeで迷路生成]
+  C --> D2[generateCheckpointsでチェックポイント生成]
   C --> E[getInitialPlayerStateで初期位置設定]
   B --> F[MazeView3D描画]
   B --> G[CompassOverlay描画]
@@ -44,11 +47,15 @@ flowchart TD
   J -->|H| M[ヘルプ表示切替]
   K --> N[player更新]
   L --> N
-  N --> O[GOAL到達判定]
-  O -->|Yes| P[finished=true]
-  O -->|No| I
-  C --> Q[50ms間隔でelapsed更新]
-  P --> R[タイマー停止]
+  N --> O[チェックポイント通過判定]
+  O --> P[passedCheckpointKeys更新]
+  P --> Q{goalActiveか}
+  Q -->|No| I
+  Q -->|Yes| R[GOAL到達判定]
+  R -->|Yes| S[finished=true]
+  R -->|No| I
+  C --> U[50ms間隔でelapsed更新]
+  S --> T[タイマー停止]
 ```
 
 ## 3D描画フロー（`WireframeProjectionBuilder`）
@@ -58,7 +65,7 @@ flowchart TD
   A[depth=0..2を走査] --> B[getRelativeCellで正面セル取得]
   B --> C{範囲外か}
   C -->|Yes| D[drawFrontWallして終了]
-  C -->|No| E[S/Gマーカー判定]
+  C -->|No| E[S/G/Cマーカー判定]
   E --> F[front/left/right壁状態を判定]
   F --> G{frontClosedか}
   G -->|Yes| H[左右側面と側面先正面壁を必要分描画]
@@ -73,11 +80,17 @@ flowchart TD
 
 | 定数 | 値 | 意味 |
 |---|---:|---|
-| `MAZE_WIDTH` | `10` | 迷路の横マス数 |
+| `MAZE_WIDTH` | `30` | 迷路の横マス数 |
 | `MAZE_HEIGHT` | `10` | 迷路の縦マス数 |
 | `START` | `{x: 0, y: 0}` | スタート座標 |
 | `GOAL` | `{x: MAZE_WIDTH - 1, y: MAZE_HEIGHT - 1}` | ゴール座標 |
 | `DIRECTION_LABEL` | `N/E/S/W -> 北/東/南/西` | UI表示用の方角ラベル |
+
+## `src/game/checkpointUtils.ts`
+
+| 定数 | 値 | 意味 |
+|---|---:|---|
+| `CELLS_PER_CHECKPOINT` | `30` | 30マスにつき1つ配置する比率 |
 
 ## `src/game/playerActions.ts`
 
@@ -122,9 +135,18 @@ flowchart TD
 - `moveForward(player, maze)`
   - 前方に壁がなければ1マス進む。
 
+## `src/game/checkpointUtils.ts`
+
+- `getCheckpointCount(width, height)`
+  - 30マスにつき1つの比率でチェックポイント数を算出する（最低1）。
+- `generateCheckpoints(width, height, excluded)`
+  - 除外セル（START/GOAL）を除いた座標からランダム配置し、`1..N` の番号を付与する。
+- `toCheckpointKey(x, y)`
+  - 座標をキー文字列へ変換する。
+
 ## `src/game/WireframeProjection.ts`
 
-- `createWireframeProjection(maze, player)`
+- `createWireframeProjection(maze, player, checkpoints, passedCheckpointKeys, goalActive)`
   - 3Dビュー描画に必要な `lines` / `faces` / `markers` / `wallJudgements` を生成する。
 
 ### `WireframeProjectionBuilder` 内部メソッド
@@ -142,7 +164,7 @@ flowchart TD
 - `drawSideFrontWall(side, nearFrame, farFrame, depth, flushToCanvas)`
   - 側面先の正面壁を追加し、マーカー中心点を返す。
 - `pushMarkerForCell(cell, x, y, size)`
-  - 対象セルがスタート/ゴールならマーカー追加。
+  - 対象セルがスタート/ゴール/チェックポイントならマーカー追加。
 - `toCellWallDebug(cell)`
   - デバッグ出力用に壁情報を整形。
 
@@ -159,13 +181,13 @@ flowchart TD
 
 ## `src/components/MazeView3D.tsx`
 
-- `MazeView3D({ maze, player })`
-  - 投影データをSVGとして描画し、開発時は壁判定ログを出力する。
+- `MazeView3D({ maze, player, checkpoints, passedCheckpointKeys, goalActive })`
+  - 投影データをSVGとして描画し、ゴールLOCKED/ACTIVEとチェックポイント番号・通過状態を反映する。
 
 ## `src/components/HelpMap.tsx`
 
-- `HelpMap({ maze, player })`
-  - 2D俯瞰マップ（壁線、S/G、プレイヤー向き）を描画する。
+- `HelpMap({ maze, player, checkpoints, passedCheckpointKeys, goalActive })`
+  - 2D俯瞰マップ（壁線、S/G/チェックポイント番号、プレイヤー向き、ゴールLOCKED表示）を描画する。
 
 ## `src/components/CompassOverlay.tsx`
 
@@ -180,6 +202,10 @@ flowchart TD
 |---|---|---|
 | `maze` | `Maze` | 現在の迷路データ |
 | `player` | `PlayerState` | プレイヤー座標と向き |
+| `checkpoints` | `Checkpoint[]` | 現在ゲームに配置されたチェックポイント |
+| `passedCheckpointKeys` | `Set<string>` | 通過済みチェックポイント座標キー |
+| `passedCheckpointCount` | `number` | 通過済みチェックポイント数 |
+| `goalActive` | `boolean` | すべて通過済みでゴール可能か |
 | `startTime` | `number \| null` | タイマー開始時刻 |
 | `elapsed` | `number` | 経過ミリ秒 |
 | `finished` | `boolean` | ゴール済みか |

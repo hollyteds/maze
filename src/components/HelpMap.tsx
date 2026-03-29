@@ -1,5 +1,6 @@
 import React from 'react';
 import { GOAL, START } from '../game/constants';
+import { Checkpoint, toCheckpointKey } from '../game/checkpointUtils';
 import { Maze, PlayerState } from '../mazeUtils';
 
 // HelpMapコンポーネントの入力プロパティ。
@@ -8,15 +9,24 @@ type HelpMapProps = {
   maze: Maze;
   // プレイヤー現在位置と向き。
   player: PlayerState;
+  // 全チェックポイント座標。
+  checkpoints: Checkpoint[];
+  // 通過済みチェックポイント座標キー集合。
+  passedCheckpointKeys: Set<string>;
+  // ゴールが有効化済みかどうか。
+  goalActive: boolean;
 };
 
 /**
  * ヘルプ用の2D俯瞰マップを描画する。
  * @param maze 迷路全体データ
  * @param player プレイヤー位置と向き
+ * @param checkpoints 全チェックポイント座標
+ * @param passedCheckpointKeys 通過済みチェックポイント座標キー集合
+ * @param goalActive ゴール有効化状態
  * @returns 壁線・S/G・プレイヤー向きを描いたSVG
  */
-export function HelpMap({ maze, player }: HelpMapProps) {
+export function HelpMap({ maze, player, checkpoints, passedCheckpointKeys, goalActive }: HelpMapProps) {
   // 1マスの描画サイズ（px）。
   const cellSize = 22;
   // マップ外周の余白（px）。
@@ -43,10 +53,46 @@ export function HelpMap({ maze, player }: HelpMapProps) {
         : player.dir === 'S'
           ? `${px},${py + 6} ${px - 5},${py - 5} ${px + 5},${py - 5}`
           : `${px - 6},${py} ${px + 5},${py - 5} ${px + 5},${py + 5}`;
+  // チェックポイント座標をキーで引けるように変換する。
+  const checkpointMap = new Map(
+    checkpoints.map((checkpoint) => [toCheckpointKey(checkpoint.x, checkpoint.y), checkpoint])
+  );
+
+  /**
+   * セル属性に応じて床色を返す。
+   * @param x セルX座標
+   * @param y セルY座標
+   * @returns 床塗り色。対象外セルはnull
+   */
+  const getCellFloorColor = (x: number, y: number): string | null => {
+    if (x === START.x && y === START.y) return 'rgba(140, 230, 255, 0.24)';
+    if (x === GOAL.x && y === GOAL.y) return goalActive ? 'rgba(203, 255, 217, 0.24)' : 'rgba(255, 159, 159, 0.24)';
+    const checkpoint = checkpointMap.get(toCheckpointKey(x, y));
+    if (!checkpoint) return null;
+    const passed = passedCheckpointKeys.has(toCheckpointKey(checkpoint.x, checkpoint.y));
+    return passed ? 'rgba(123, 181, 138, 0.24)' : 'rgba(255, 217, 140, 0.24)';
+  };
 
   return (
     <svg width={width} height={height} style={{ background: '#031109', border: '1px solid #58d47f' }}>
       <rect x={0} y={0} width={width} height={height} fill="#031109" />
+      {maze.flatMap((row, y) =>
+        row.map((_, x) => {
+          // 特殊セルだけ床色を塗る。
+          const floorColor = getCellFloorColor(x, y);
+          if (!floorColor) return null;
+          return (
+            <rect
+              key={`floor-${x}-${y}`}
+              x={pad + x * cellSize + 1.2}
+              y={pad + y * cellSize + 1.2}
+              width={cellSize - 2.4}
+              height={cellSize - 2.4}
+              fill={floorColor}
+            />
+          );
+        })
+      )}
       {maze.flatMap((row, y) =>
         row.flatMap((cell, x) => {
           const x0 = pad + x * cellSize;
@@ -61,6 +107,33 @@ export function HelpMap({ maze, player }: HelpMapProps) {
           ];
         })
       )}
+      {checkpoints.map((checkpoint) => {
+        // 各チェックポイントの通過状態を座標キーで判定する。
+        const passed = passedCheckpointKeys.has(toCheckpointKey(checkpoint.x, checkpoint.y));
+        const cx = pad + checkpoint.x * cellSize + cellSize / 2;
+        const cy = pad + checkpoint.y * cellSize + cellSize / 2;
+        return (
+          <g key={`checkpoint-${checkpoint.id}`}>
+            <circle
+              cx={cx}
+              cy={cy}
+              r={5}
+              fill={passed ? 'rgba(123,181,138,0.32)' : 'rgba(255,217,140,0.25)'}
+              stroke={passed ? '#7bb58a' : '#ffd98c'}
+              strokeWidth={1}
+            />
+            <text
+              x={cx}
+              y={cy + 3}
+              fill={passed ? '#7bb58a' : '#ffd98c'}
+              textAnchor="middle"
+              fontSize={checkpoint.id >= 10 ? '7' : '8'}
+            >
+              {checkpoint.id}
+            </text>
+          </g>
+        );
+      })}
       <rect
         x={pad + START.x * cellSize + 4}
         y={pad + START.y * cellSize + 4}
@@ -85,13 +158,14 @@ export function HelpMap({ maze, player }: HelpMapProps) {
         width={cellSize - 8}
         height={cellSize - 8}
         fill="none"
-        stroke="#cbffd9"
+        stroke={goalActive ? '#cbffd9' : '#ff9f9f'}
+        strokeDasharray={goalActive ? undefined : '3 2'}
         strokeWidth={1.2}
       />
       <text
         x={pad + GOAL.x * cellSize + cellSize / 2}
         y={pad + GOAL.y * cellSize + cellSize / 2 + 4}
-        fill="#cbffd9"
+        fill={goalActive ? '#cbffd9' : '#ff9f9f'}
         textAnchor="middle"
         fontSize="12"
       >

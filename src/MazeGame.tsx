@@ -2,7 +2,7 @@ import React from 'react';
 import { CompassOverlay } from './components/CompassOverlay';
 import { HelpMap } from './components/HelpMap';
 import { MazeView3D } from './components/MazeView3D';
-import { DIRECTION_LABEL } from './game/constants';
+import { toCheckpointKey } from './game/checkpointUtils';
 import { VIEWPORT_WIDTH } from './game/WireframeProjection';
 import { useMazeGameController } from './hooks/useMazeGameController';
 
@@ -12,7 +12,18 @@ import { useMazeGameController } from './hooks/useMazeGameController';
  */
 export default function MazeGame() {
   // ゲーム進行に必要な状態とハンドラをフックから取得する。
-  const { maze, player, elapsed, finished, showHelpMap, handleRetry } = useMazeGameController();
+  const {
+    maze,
+    player,
+    elapsed,
+    finished,
+    showHelpMap,
+    checkpoints,
+    passedCheckpointKeys,
+    passedCheckpointCount,
+    goalActive,
+    handleRetry,
+  } = useMazeGameController();
 
   return (
     <div
@@ -27,7 +38,13 @@ export default function MazeGame() {
     >
       <h1 style={{ letterSpacing: 2, marginBottom: 14 }}>3D MAZE</h1>
       <div style={{ position: 'relative', width: VIEWPORT_WIDTH, margin: '0 auto' }}>
-        <MazeView3D maze={maze} player={player} />
+        <MazeView3D
+          maze={maze}
+          player={player}
+          checkpoints={checkpoints}
+          passedCheckpointKeys={passedCheckpointKeys}
+          goalActive={goalActive}
+        />
         <CompassOverlay dir={player.dir} />
         {showHelpMap && (
           <div
@@ -41,7 +58,13 @@ export default function MazeGame() {
             }}
           >
             <div>
-              <HelpMap maze={maze} player={player} />
+              <HelpMap
+                maze={maze}
+                player={player}
+                checkpoints={checkpoints}
+                passedCheckpointKeys={passedCheckpointKeys}
+                goalActive={goalActive}
+              />
               <p style={{ marginTop: 10, marginBottom: 0, fontSize: 13, color: '#cbffd9' }}>H: CLOSE HELP MAP</p>
             </div>
           </div>
@@ -49,13 +72,29 @@ export default function MazeGame() {
       </div>
       <div style={{ margin: '18px 0' }}>
         <span>TIME: {(elapsed / 1000).toFixed(2)} SEC</span>
-        <span style={{ marginLeft: 16 }}>
-          DIR: {player.dir} ({DIRECTION_LABEL[player.dir]})
+        <span style={{ marginLeft: 16, color: goalActive ? '#cbffd9' : '#ff9f9f' }}>
+          GOAL: {goalActive ? 'ACTIVE' : 'LOCKED'}
         </span>
-        {finished && <span style={{ marginLeft: 16, color: '#cbffd9' }}>GOAL</span>}
-        <span style={{ marginLeft: 16, color: showHelpMap ? '#cbffd9' : '#7bb58a' }}>
-          HELP MAP: {showHelpMap ? 'ON' : 'OFF'} (H)
+        <span style={{ marginLeft: 16, color: '#ffd98c' }}>
+          CHECKPOINT: {passedCheckpointCount}/{checkpoints.length}
         </span>
+        {finished && <span style={{ marginLeft: 16, color: '#cbffd9' }}>CLEAR</span>}
+      </div>
+      <div style={{ marginBottom: 12, fontSize: 13 }}>
+        <span style={{ color: '#7bb58a', marginRight: 8 }}>CP STATUS:</span>
+        {checkpoints.map((checkpoint) => {
+          // 通過済みかどうかを番号単位で表示する。
+          const passed = passedCheckpointKeys.has(toCheckpointKey(checkpoint.x, checkpoint.y));
+          return (
+            <span
+              key={`cp-status-${checkpoint.id}`}
+              style={{ marginRight: 8, color: passed ? '#7bb58a' : '#ffd98c' }}
+            >
+              {checkpoint.id}
+              {passed ? '✓' : ''}
+            </span>
+          );
+        })}
       </div>
       <button
         onClick={handleRetry}

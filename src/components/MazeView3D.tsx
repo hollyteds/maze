@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useId, useMemo, useRef } from 'react';
 import {
   createWireframeProjection,
   GLOW_COLOR,
@@ -6,6 +6,7 @@ import {
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
 } from '../game/WireframeProjection';
+import { Checkpoint } from '../game/checkpointUtils';
 import { Maze, PlayerState } from '../mazeUtils';
 
 // MazeView3Dコンポーネントの入力プロパティ。
@@ -14,19 +15,43 @@ type MazeView3DProps = {
   maze: Maze;
   // 投影元となるプレイヤー位置と向き。
   player: PlayerState;
+  // 全チェックポイント座標。
+  checkpoints: Checkpoint[];
+  // 通過済みチェックポイント座標キー集合。
+  passedCheckpointKeys: Set<string>;
+  // ゴール有効化状態。
+  goalActive: boolean;
 };
 
 /**
  * 1人称の3Dワイヤーフレームビューを描画する。
  * @param maze 迷路データ
  * @param player プレイヤー位置と向き
+ * @param checkpoints 全チェックポイント座標
+ * @param passedCheckpointKeys 通過済みチェックポイント座標キー集合
+ * @param goalActive ゴール有効化状態
  * @returns 擬似透視を表現したSVGビュー
  */
-export function MazeView3D({ maze, player }: MazeView3DProps) {
+export function MazeView3D({
+  maze,
+  player,
+  checkpoints,
+  passedCheckpointKeys,
+  goalActive,
+}: MazeView3DProps) {
+  // SVGのクリップパスID。複数描画時のID衝突を避ける。
+  const clipPathId = useId();
   // 迷路や位置が変わったときのみ投影データを再計算する。
   const projection = useMemo(
-    () => createWireframeProjection(maze, player),
-    [maze, player.x, player.y, player.dir]
+    () =>
+      createWireframeProjection(
+        maze,
+        player,
+        checkpoints,
+        passedCheckpointKeys,
+        goalActive
+      ),
+    [maze, player.x, player.y, player.dir, checkpoints, passedCheckpointKeys, goalActive]
   );
   // 同一内容のデバッグログを連続出力しないための前回スナップショット。
   const lastDebugSnapshotRef = useRef<string>('');
@@ -83,47 +108,78 @@ export function MazeView3D({ maze, player }: MazeView3DProps) {
           <rect width="4" height="4" fill="#020503" />
           <line x1="0" y1="0.5" x2="4" y2="0.5" stroke="#06180d" strokeWidth="1" />
         </pattern>
+        <clipPath id={clipPathId} clipPathUnits="userSpaceOnUse">
+          <rect x={0} y={0} width={VIEWPORT_WIDTH} height={VIEWPORT_HEIGHT} />
+        </clipPath>
       </defs>
       <rect x={0} y={0} width={VIEWPORT_WIDTH} height={VIEWPORT_HEIGHT} fill="url(#scanline)" />
-      {[...projection.faces]
-        .sort((a, b) => b.depth - a.depth)
-        .map((face, index) => <polygon key={`face-${index}`} points={face.points} fill={face.fill} />)}
-      <rect x={2} y={2} width={VIEWPORT_WIDTH - 4} height={VIEWPORT_HEIGHT - 4} fill="none" stroke={GLOW_COLOR} strokeOpacity={0.55} />
-      {projection.lines.map((line, index) => (
-        <line
-          key={index}
-          x1={line.x1}
-          y1={line.y1}
-          x2={line.x2}
-          y2={line.y2}
-          stroke={LINE_COLOR}
-          strokeWidth={line.width}
-          strokeLinecap="round"
-        />
-      ))}
-      {projection.markers.map((marker, index) => (
-        <g key={`marker-${index}`}>
-          <rect
-            x={marker.x - marker.size}
-            y={marker.y - marker.size}
-            width={marker.size * 2}
-            height={marker.size * 2}
-            fill="none"
-            stroke={marker.label === 'G' ? '#cbffd9' : '#8ce6ff'}
-            strokeWidth={1.2}
+      <g clipPath={`url(#${clipPathId})`}>
+        {[...projection.faces]
+          .sort((a, b) => b.depth - a.depth)
+          .map((face, index) => <polygon key={`face-${index}`} points={face.points} fill={face.fill} />)}
+        {[...projection.floorPatches]
+          .sort((a, b) => b.depth - a.depth)
+          .map((patch, index) => (
+            <polygon key={`floor-${index}`} points={patch.points} fill={patch.fill} />
+          ))}
+        {projection.lines.map((line, index) => (
+          <line
+            key={index}
+            x1={line.x1}
+            y1={line.y1}
+            x2={line.x2}
+            y2={line.y2}
+            stroke={LINE_COLOR}
+            strokeWidth={line.width}
+            strokeLinecap="round"
           />
-          <text
-            x={marker.x}
-            y={marker.y + marker.size * 0.35}
-            textAnchor="middle"
-            fontSize={Math.max(10, marker.size * 1.1)}
-            fontFamily='"Courier New", "Lucida Console", monospace'
-            fill={marker.label === 'G' ? '#cbffd9' : '#8ce6ff'}
-          >
-            {marker.label}
-          </text>
-        </g>
-      ))}
+        ))}
+        {projection.markers.map((marker, index) => (
+          <g key={`marker-${index}`}>
+            <rect
+              x={marker.x - marker.size}
+              y={marker.y - marker.size}
+              width={marker.size * 2}
+              height={marker.size * 2}
+              fill="none"
+              stroke={
+                marker.label === 'G'
+                  ? marker.goalActive
+                    ? '#cbffd9'
+                    : '#ff9f9f'
+                  : marker.label === 'C'
+                    ? marker.checkpointPassed
+                      ? '#7bb58a'
+                      : '#ffd98c'
+                    : '#8ce6ff'
+              }
+              strokeDasharray={marker.label === 'G' && !marker.goalActive ? '3 2' : undefined}
+              strokeWidth={1.2}
+            />
+            <text
+              x={marker.x}
+              y={marker.y + marker.size * 0.35}
+              textAnchor="middle"
+              fontSize={Math.max(9, marker.size * 1.05)}
+              fontFamily='"Courier New", "Lucida Console", monospace'
+              fill={
+                marker.label === 'G'
+                  ? marker.goalActive
+                    ? '#cbffd9'
+                    : '#ff9f9f'
+                  : marker.label === 'C'
+                    ? marker.checkpointPassed
+                      ? '#7bb58a'
+                      : '#ffd98c'
+                    : '#8ce6ff'
+              }
+            >
+              {marker.label === 'C' ? marker.checkpointNumber ?? 'C' : marker.label}
+            </text>
+          </g>
+        ))}
+      </g>
+      <rect x={2} y={2} width={VIEWPORT_WIDTH - 4} height={VIEWPORT_HEIGHT - 4} fill="none" stroke={GLOW_COLOR} strokeOpacity={0.55} />
     </svg>
   );
 }
