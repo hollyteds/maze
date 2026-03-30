@@ -60,6 +60,7 @@ export type WireLine = {
   y2: number;
   width: number;
   part: string;
+  depth: number;
 };
 
 // 壁面ポリゴンの描画情報。
@@ -298,6 +299,13 @@ class WireframeProjectionBuilder {
           const markerPoint = this.drawSideFrontWall('right', farPerspective, depth);
           this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize);
           actions.push('drawSideFrontWall(right)');
+        }
+        // 正面が壁でも左右通路が開いている場合は、その奥の正面壁を探索して描画する。
+        if (leftVisible && !leftFrontClosed) {
+          this.drawDeeperSideFrontWall('left', depth + 1, actions);
+        }
+        if (rightVisible && !rightFrontClosed) {
+          this.drawDeeperSideFrontWall('right', depth + 1, actions);
         }
         this.wallJudgements.push({
           depth,
@@ -582,9 +590,18 @@ class WireframeProjectionBuilder {
    * @param y2 終点Y
    * @param width 線幅
    * @param part デバッグ識別名
+   * @param depth 奥行き深度
    */
-  private pushLine(x1: number, y1: number, x2: number, y2: number, width = 2, part = 'unknown') {
-    this.lines.push({ x1, y1, x2, y2, width, part });
+  private pushLine(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    width = 2,
+    part = 'unknown',
+    depth = 0
+  ) {
+    this.lines.push({ x1, y1, x2, y2, width, part, depth });
   }
 
   /**
@@ -622,17 +639,47 @@ class WireframeProjectionBuilder {
       depth,
       'front-face'
     );
-    this.pushLine(left.ceiling.x, left.ceiling.y, right.ceiling.x, right.ceiling.y, 2.2, 'front-top');
-    this.pushLine(left.floor.x, left.floor.y, right.floor.x, right.floor.y, 2.2, 'front-bottom');
-    this.pushLine(left.ceiling.x, left.ceiling.y, left.floor.x, left.floor.y, 2.2, 'front-left');
+    this.pushLine(left.ceiling.x, left.ceiling.y, right.ceiling.x, right.ceiling.y, 2.2, 'front-top', depth);
+    this.pushLine(left.floor.x, left.floor.y, right.floor.x, right.floor.y, 2.2, 'front-bottom', depth);
+    this.pushLine(left.ceiling.x, left.ceiling.y, left.floor.x, left.floor.y, 2.2, 'front-left', depth);
     this.pushLine(
       right.ceiling.x,
       right.ceiling.y,
       right.floor.x,
       right.floor.y,
       2.2,
-      'front-right'
+      'front-right',
+      depth
     );
+  }
+
+  /**
+   * 側方通路の奥にある正面壁を可視範囲内で探索して描画する。
+   * @param side 探索対象側（left/right）
+   * @param startDepth 探索開始する奥行き（現在depthの次）
+   * @param actions デバッグ用アクション記録先
+   */
+  private drawDeeperSideFrontWall(
+    side: 'left' | 'right',
+    startDepth: number,
+    actions: string[]
+  ) {
+    const sideOffset = side === 'left' ? -1 : 1;
+
+    for (let depth = startDepth; depth < this.viewDepth; depth++) {
+      const cell = this.getRelativeCell(sideOffset, depth);
+      if (!cell) break;
+      const frontClosed = cell.walls[this.player.dir];
+      // 通路が続く間はさらに奥を探索する。
+      if (!frontClosed) continue;
+
+      const perspective = this.perspectiveByDepthKey[this.getDepthKey(depth + 1)];
+      const markerPoint = this.drawSideFrontWall(side, perspective, depth);
+      const markerSize = Math.max(7, 14 - depth * 2.1);
+      this.pushMarkerForCell(cell, markerPoint.centerX, markerPoint.centerY, markerSize);
+      actions.push(`drawSideFrontWall(${side},deeperDepth=${depth})`);
+      break;
+    }
   }
 
   /**
@@ -741,7 +788,8 @@ class WireframeProjectionBuilder {
       near.floor.x,
       near.floor.y,
       2.2,
-      `${partPrefix}-near`
+      `${partPrefix}-near`,
+      depth
     );
     this.pushLine(
       far.ceiling.x,
@@ -749,7 +797,8 @@ class WireframeProjectionBuilder {
       far.floor.x,
       far.floor.y,
       1.8,
-      `${partPrefix}-far`
+      `${partPrefix}-far`,
+      depth
     );
     this.pushLine(
       near.ceiling.x,
@@ -757,7 +806,8 @@ class WireframeProjectionBuilder {
       far.ceiling.x,
       far.ceiling.y,
       1.8,
-      `${partPrefix}-top`
+      `${partPrefix}-top`,
+      depth
     );
     this.pushLine(
       near.floor.x,
@@ -765,7 +815,8 @@ class WireframeProjectionBuilder {
       far.floor.x,
       far.floor.y,
       1.8,
-      `${partPrefix}-bottom`
+      `${partPrefix}-bottom`,
+      depth
     );
   }
 
@@ -792,7 +843,8 @@ class WireframeProjectionBuilder {
       inner.floor.x,
       inner.floor.y,
       1.8,
-      `${partPrefix}-inner`
+      `${partPrefix}-inner`,
+      depth
     );
     this.pushLine(
       outer.ceiling.x,
@@ -800,7 +852,8 @@ class WireframeProjectionBuilder {
       outer.floor.x,
       outer.floor.y,
       1.8,
-      `${partPrefix}-outer`
+      `${partPrefix}-outer`,
+      depth
     );
     this.pushLine(
       inner.ceiling.x,
@@ -808,7 +861,8 @@ class WireframeProjectionBuilder {
       outer.ceiling.x,
       outer.ceiling.y,
       1.8,
-      `${partPrefix}-top`
+      `${partPrefix}-top`,
+      depth
     );
     this.pushLine(
       inner.floor.x,
@@ -816,7 +870,8 @@ class WireframeProjectionBuilder {
       outer.floor.x,
       outer.floor.y,
       1.8,
-      `${partPrefix}-bottom`
+      `${partPrefix}-bottom`,
+      depth
     );
 
     return {

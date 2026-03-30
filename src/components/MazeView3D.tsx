@@ -53,6 +53,68 @@ export function MazeView3D({
       ),
     [maze, player.x, player.y, player.dir, checkpoints, passedCheckpointKeys, goalActive]
   );
+  // 深度ごとに重なり順を統一する描画要素。
+  const layeredPrimitives = useMemo(() => {
+    type Primitive =
+      | {
+          key: string;
+          depth: number;
+          kind: 'line';
+          part: string;
+          line: {
+            x1: number;
+            y1: number;
+            x2: number;
+            y2: number;
+            width: number;
+          };
+        }
+      | { key: string; depth: number; kind: 'floor'; part: string; points: string; fill: string }
+      | { key: string; depth: number; kind: 'face'; part: string; points: string; fill: string };
+
+    const primitives: Primitive[] = [
+      ...projection.lines.map((line, index) => ({
+        key: `line-${index}`,
+        depth: line.depth,
+        kind: 'line' as const,
+        part: line.part,
+        line: line,
+      })),
+      ...projection.floorPatches.map((patch, index) => ({
+        key: `floor-${index}`,
+        depth: patch.depth,
+        kind: 'floor' as const,
+        part: patch.part,
+        points: patch.points,
+        fill: patch.fill,
+      })),
+      ...projection.faces.map((face, index) => ({
+        key: `face-${index}`,
+        depth: face.depth,
+        kind: 'face' as const,
+        part: face.part,
+        points: face.points,
+        fill: face.fill,
+      })),
+    ];
+    const kindOrder: Record<Primitive['kind'], number> = {
+      line: 0,
+      floor: 1,
+      face: 2,
+    };
+    // 同一depthでは側面壁を最前面にするための判定。
+    const isSideWallPart = (part: string) => part.includes('-side-wall-');
+
+    // 奥→手前の順で描画し、同深度では「線→床塗り→壁塗り」、
+    // さらに側面壁だけは同深度の最上位へ押し上げる。
+    return primitives.sort((a, b) => {
+      if (a.depth !== b.depth) return b.depth - a.depth;
+      const sideWallBiasA = isSideWallPart(a.part) ? 1 : 0;
+      const sideWallBiasB = isSideWallPart(b.part) ? 1 : 0;
+      if (sideWallBiasA !== sideWallBiasB) return sideWallBiasA - sideWallBiasB;
+      return kindOrder[a.kind] - kindOrder[b.kind];
+    });
+  }, [projection.lines, projection.floorPatches, projection.faces]);
   // 同一内容のデバッグログを連続出力しないための前回スナップショット。
   const lastDebugSnapshotRef = useRef<string>('');
 
@@ -64,6 +126,7 @@ export function MazeView3D({
     const currentCell = maze[player.y]?.[player.x];
     const debugLines = lines.map((line) => ({
       part: line.part,
+      depth: line.depth,
       x1: Number(line.x1.toFixed(1)),
       y1: Number(line.y1.toFixed(1)),
       x2: Number(line.x2.toFixed(1)),
@@ -114,26 +177,26 @@ export function MazeView3D({
       </defs>
       <rect x={0} y={0} width={VIEWPORT_WIDTH} height={VIEWPORT_HEIGHT} fill="url(#scanline)" />
       <g clipPath={`url(#${clipPathId})`}>
-        {[...projection.floorPatches]
-          .sort((a, b) => b.depth - a.depth)
-          .map((patch, index) => (
-            <polygon key={`floor-${index}`} points={patch.points} fill={patch.fill} />
-          ))}
-        {[...projection.faces]
-          .sort((a, b) => b.depth - a.depth)
-          .map((face, index) => <polygon key={`face-${index}`} points={face.points} fill={face.fill} />)}
-        {projection.lines.map((line, index) => (
-          <line
-            key={index}
-            x1={line.x1}
-            y1={line.y1}
-            x2={line.x2}
-            y2={line.y2}
-            stroke={LINE_COLOR}
-            strokeWidth={line.width}
-            strokeLinecap="round"
-          />
-        ))}
+        {layeredPrimitives.map((primitive) =>
+          primitive.kind === 'line' ? (
+            <line
+              key={primitive.key}
+              x1={primitive.line.x1}
+              y1={primitive.line.y1}
+              x2={primitive.line.x2}
+              y2={primitive.line.y2}
+              stroke={LINE_COLOR}
+              strokeWidth={primitive.line.width}
+              strokeLinecap="round"
+            />
+          ) : (
+            <polygon
+              key={primitive.key}
+              points={primitive.points}
+              fill={primitive.fill}
+            />
+          )
+        )}
         {projection.markers.map((marker, index) => (
           <g key={`marker-${index}`}>
             <rect
