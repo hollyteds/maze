@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { GOAL, MAZE_HEIGHT, MAZE_WIDTH, START } from '../game/constants';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CAMERA_MOVE_DURATION_MS,
+  GOAL,
+  MAZE_HEIGHT,
+  MAZE_WIDTH,
+  START,
+} from '../game/constants';
 import { Checkpoint, generateCheckpoints, toCheckpointKey } from '../game/checkpointUtils';
 import { moveForward, rotate } from '../game/playerActions';
 import { generateMaze, getInitialPlayerState, Maze, PlayerState } from '../mazeUtils';
@@ -71,6 +77,8 @@ export const useMazeGameController = (): MazeGameController => {
   const [finished, setFinished] = useState(false);
   // ヘルプマップ表示状態。
   const [showHelpMap, setShowHelpMap] = useState(false);
+  // 入力ロック解除時刻（エポックms）。カメラ移動中の連続入力を防ぐ。
+  const inputLockUntilRef = useRef(0);
 
   // 通過済みチェックポイント数。
   const passedCheckpointCount = passedCheckpointKeys.size;
@@ -119,6 +127,13 @@ export const useMazeGameController = (): MazeGameController => {
       if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
       }
+      // カメラ移動中は矢印操作を無効化し、視覚移動完了まで入力を待たせる。
+      if (
+        (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') &&
+        Date.now() < inputLockUntilRef.current
+      ) {
+        return;
+      }
       // クリア後は状態変化を止める。
       if (finished) return;
 
@@ -128,6 +143,8 @@ export const useMazeGameController = (): MazeGameController => {
       if (e.key === 'ArrowRight') next = { ...player, dir: rotate(player.dir, 'right') };
 
       if (next !== player) {
+        // カメラ演出時間と同じdurationだけ次の矢印入力をロックする。
+        inputLockUntilRef.current = Date.now() + CAMERA_MOVE_DURATION_MS;
         setPlayer(next);
         // 移動先セルを訪問済みへ追加し、ヘルプマップ開示対象として保持する。
         setVisitedCellKeys((prev) => {
@@ -173,6 +190,7 @@ export const useMazeGameController = (): MazeGameController => {
     setElapsed(0);
     setFinished(false);
     setShowHelpMap(false);
+    inputLockUntilRef.current = 0;
   }, []);
 
   return {

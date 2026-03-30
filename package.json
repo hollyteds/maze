@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "react": "^18.0.0",
-    "react-dom": "^18.0.0"
+    "react-dom": "^18.0.0",
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

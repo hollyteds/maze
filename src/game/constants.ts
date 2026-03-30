@@ -28,6 +28,8 @@ export const GOAL_ACTIVE_FLOOR_COLOR = 'rgba(255, 92, 92, 0.24)';
 export const GOAL_INACTIVE_FLOOR_COLOR = 'rgba(154, 154, 154, 0.24)';
 // 上部ガイドテキストの通常色。警告表示と区別しない現在仕様に合わせる。
 export const GOAL_PROMPT_TEXT_COLOR = '#cbffd9';
+// カメラ移動アニメーション時間（ミリ秒）。入力ロック解除タイミングもこの値に同期する。
+export const CAMERA_MOVE_DURATION_MS = 190;
 
 // 3Dビューの壁判定デバッグログ出力フラグ。falseでconsoleログを停止する。
 export const ENABLE_WALL_DEBUG_LOG = false;
