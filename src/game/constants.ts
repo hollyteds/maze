@@ -17,3 +17,6 @@ export const DIRECTION_LABEL: Record<Direction, string> = {
   S: '南',
   W: '西',
 };
+
+// 3Dビューの壁判定デバッグログ出力フラグ。falseでconsoleログを停止する。
+export const ENABLE_WALL_DEBUG_LOG = false;

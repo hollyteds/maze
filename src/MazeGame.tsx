@@ -6,6 +6,11 @@ import { toCheckpointKey } from './game/checkpointUtils';
 import { VIEWPORT_WIDTH } from './game/WireframeProjection';
 import { useMazeGameController } from './hooks/useMazeGameController';
 
+// ゴール有効時の表示色。赤でアクティブ状態を明確化する。
+const GOAL_ACTIVE_COLOR = '#ff5c5c';
+// ゴール無効時の表示色。無彩色でロック状態を示す。
+const GOAL_INACTIVE_COLOR = '#9a9a9a';
+
 /**
  * 迷路ゲームの画面レイアウトを構成する。
  * @returns 3Dビュー、ヘルプ、タイマーを含むゲームUI
@@ -44,6 +49,7 @@ export default function MazeGame() {
           checkpoints={checkpoints}
           passedCheckpointKeys={passedCheckpointKeys}
           goalActive={goalActive}
+          finished={finished}
         />
         <CompassOverlay dir={player.dir} />
         {showHelpMap && (
@@ -72,7 +78,7 @@ export default function MazeGame() {
       </div>
       <div style={{ margin: '18px 0' }}>
         <span>TIME: {(elapsed / 1000).toFixed(2)} SEC</span>
-        <span style={{ marginLeft: 16, color: goalActive ? '#cbffd9' : '#ff9f9f' }}>
+        <span style={{ marginLeft: 16, color: goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR }}>
           GOAL: {goalActive ? 'ACTIVE' : 'LOCKED'}
         </span>
         <span style={{ marginLeft: 16, color: '#ffd98c' }}>

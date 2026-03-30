@@ -3,6 +3,15 @@ import { GOAL, START } from '../game/constants';
 import { Checkpoint, toCheckpointKey } from '../game/checkpointUtils';
 import { Maze, PlayerState } from '../mazeUtils';
 
+// ゴール有効時の色。赤で到達目標を強調する。
+const GOAL_ACTIVE_COLOR = '#ff5c5c';
+// ゴール無効時の色。無彩色でロック状態を示す。
+const GOAL_INACTIVE_COLOR = '#9a9a9a';
+// ゴール有効時の床ハイライト色。
+const GOAL_ACTIVE_FLOOR_COLOR = 'rgba(255, 92, 92, 0.24)';
+// ゴール無効時の床ハイライト色。
+const GOAL_INACTIVE_FLOOR_COLOR = 'rgba(154, 154, 154, 0.24)';
+
 // HelpMapコンポーネントの入力プロパティ。
 type HelpMapProps = {
   // 表示対象の迷路データ。
@@ -66,7 +75,7 @@ export function HelpMap({ maze, player, checkpoints, passedCheckpointKeys, goalA
    */
   const getCellFloorColor = (x: number, y: number): string | null => {
     if (x === START.x && y === START.y) return 'rgba(140, 230, 255, 0.24)';
-    if (x === GOAL.x && y === GOAL.y) return goalActive ? 'rgba(203, 255, 217, 0.24)' : 'rgba(255, 159, 159, 0.24)';
+    if (x === GOAL.x && y === GOAL.y) return goalActive ? GOAL_ACTIVE_FLOOR_COLOR : GOAL_INACTIVE_FLOOR_COLOR;
     const checkpoint = checkpointMap.get(toCheckpointKey(x, y));
     if (!checkpoint) return null;
     const passed = passedCheckpointKeys.has(toCheckpointKey(checkpoint.x, checkpoint.y));
@@ -158,14 +167,14 @@ export function HelpMap({ maze, player, checkpoints, passedCheckpointKeys, goalA
         width={cellSize - 8}
         height={cellSize - 8}
         fill="none"
-        stroke={goalActive ? '#cbffd9' : '#ff9f9f'}
+        stroke={goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR}
         strokeDasharray={goalActive ? undefined : '3 2'}
         strokeWidth={1.2}
       />
       <text
         x={pad + GOAL.x * cellSize + cellSize / 2}
         y={pad + GOAL.y * cellSize + cellSize / 2 + 4}
-        fill={goalActive ? '#cbffd9' : '#ff9f9f'}
+        fill={goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR}
         textAnchor="middle"
         fontSize="12"
       >

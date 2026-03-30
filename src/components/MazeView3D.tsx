@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useMemo, useRef } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   createWireframeProjection,
   GLOW_COLOR,
@@ -7,7 +7,21 @@ import {
   VIEWPORT_WIDTH,
 } from '../game/WireframeProjection';
 import { Checkpoint } from '../game/checkpointUtils';
+import { ENABLE_WALL_DEBUG_LOG, GOAL } from '../game/constants';
 import { Maze, PlayerState } from '../mazeUtils';
+
+// ゴール解放メッセージの点滅周期（秒）。小さいほど点滅が速くなる。
+const GOAL_PROMPT_BLINK_DURATION_SEC = 0.9;
+// 未解放ゴール警告専用の点滅周期（秒）。通常より短くして注意喚起を強める。
+const GOAL_LOCKED_WARNING_BLINK_DURATION_SEC = 0.35;
+// ゴール未解放時にゴール通過警告を表示する時間（ミリ秒）。
+const GOAL_LOCKED_WARNING_DURATION_MS = 3000;
+// ゴール有効時の強調色。危険色で目立たせる。
+const GOAL_ACTIVE_COLOR = '#ff5c5c';
+// ゴール無効時の無彩色。ロック状態を明確化する。
+const GOAL_INACTIVE_COLOR = '#9a9a9a';
+// 通常ガイド表示の文字色。警告でない状態で使う。
+const GOAL_PROMPT_NORMAL_TEXT_COLOR = '#cbffd9';
 
 // MazeView3Dコンポーネントの入力プロパティ。
 type MazeView3DProps = {
@@ -21,6 +35,8 @@ type MazeView3DProps = {
   passedCheckpointKeys: Set<string>;
   // ゴール有効化状態。
   goalActive: boolean;
+  // クリア済み状態。true のときは GOAL 表示に切り替える。
+  finished: boolean;
 };
 
 /**
@@ -30,6 +46,7 @@ type MazeView3DProps = {
  * @param checkpoints 全チェックポイント座標
  * @param passedCheckpointKeys 通過済みチェックポイント座標キー集合
  * @param goalActive ゴール有効化状態
+ * @param finished クリア済み状態
  * @returns 擬似透視を表現したSVGビュー
  */
 export function MazeView3D({
@@ -38,6 +55,7 @@ export function MazeView3D({
   checkpoints,
   passedCheckpointKeys,
   goalActive,
+  finished,
 }: MazeView3DProps) {
   // SVGのクリップパスID。複数描画時のID衝突を避ける。
   const clipPathId = useId();
@@ -53,6 +71,16 @@ export function MazeView3D({
       ),
     [maze, player.x, player.y, player.dir, checkpoints, passedCheckpointKeys, goalActive]
   );
+  // ゴール解放メッセージの表示状態。
+  const [showGoalPrompt, setShowGoalPrompt] = useState(false);
+  // ゴール未解放で通過した際の警告表示状態。
+  const [showGoalLockedWarning, setShowGoalLockedWarning] = useState(false);
+  // ゴール有効化状態の前回値。false→true遷移を検出する。
+  const previousGoalActiveRef = useRef(goalActive);
+  // ゴール未解放通過警告の消去タイマーID。
+  const goalLockedWarningTimerRef = useRef<number | null>(null);
+  // 前フレーム位置。ゴールへの進入を検知する。
+  const previousPlayerPosRef = useRef({ x: player.x, y: player.y });
   // 深度ごとに重なり順を統一する描画要素。
   const layeredPrimitives = useMemo(() => {
     type Primitive =
@@ -155,7 +183,50 @@ export function MazeView3D({
   const lastDebugSnapshotRef = useRef<string>('');
 
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
+    const wasGoalActive = previousGoalActiveRef.current;
+    previousGoalActiveRef.current = goalActive;
+    // 新ゲーム開始などで未解放へ戻ったら表示をリセットする。
+    if (!goalActive) {
+      setShowGoalPrompt(false);
+      return;
+    }
+    // チェックポイント達成でゴールが解放された瞬間のみ表示する。
+    if (!wasGoalActive && goalActive && checkpoints.length > 0) {
+      setShowGoalPrompt(true);
+    }
+    return;
+  }, [goalActive, checkpoints.length]);
+
+  useEffect(() => {
+    const previousPos = previousPlayerPosRef.current;
+    previousPlayerPosRef.current = { x: player.x, y: player.y };
+    // 「未解放ゴールへの進入」時だけ警告を表示する。
+    const enteredLockedGoal =
+      !goalActive &&
+      player.x === GOAL.x &&
+      player.y === GOAL.y &&
+      (previousPos.x !== GOAL.x || previousPos.y !== GOAL.y);
+    if (!enteredLockedGoal) return;
+    setShowGoalLockedWarning(true);
+    if (goalLockedWarningTimerRef.current !== null) {
+      window.clearTimeout(goalLockedWarningTimerRef.current);
+    }
+    goalLockedWarningTimerRef.current = window.setTimeout(() => {
+      setShowGoalLockedWarning(false);
+      goalLockedWarningTimerRef.current = null;
+    }, GOAL_LOCKED_WARNING_DURATION_MS);
+  }, [goalActive, player.x, player.y]);
+
+  useEffect(() => {
+    return () => {
+      if (goalLockedWarningTimerRef.current !== null) {
+        window.clearTimeout(goalLockedWarningTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || !ENABLE_WALL_DEBUG_LOG) return;
 
     // 描画データの内訳を可視化するための開発用ログ情報を作る。
     const { lines, faces, wallJudgements } = projection;
@@ -244,8 +315,8 @@ export function MazeView3D({
               stroke={
                 primitive.marker.label === 'G'
                   ? primitive.marker.goalActive
-                    ? '#cbffd9'
-                    : '#ff9f9f'
+                    ? GOAL_ACTIVE_COLOR
+                    : GOAL_INACTIVE_COLOR
                   : primitive.marker.label === 'C'
                     ? primitive.marker.checkpointPassed
                       ? '#7bb58a'
@@ -268,8 +339,8 @@ export function MazeView3D({
               fill={
                 primitive.marker.label === 'G'
                   ? primitive.marker.goalActive
-                    ? '#cbffd9'
-                    : '#ff9f9f'
+                    ? GOAL_ACTIVE_COLOR
+                    : GOAL_INACTIVE_COLOR
                   : primitive.marker.label === 'C'
                     ? primitive.marker.checkpointPassed
                       ? '#7bb58a'
@@ -290,6 +361,24 @@ export function MazeView3D({
           )
         )}
       </g>
+      {(showGoalPrompt || showGoalLockedWarning || finished) && (
+        <text
+          x={VIEWPORT_WIDTH / 2}
+          y={30}
+          textAnchor="middle"
+          fontSize={15}
+          fontFamily='"Courier New", "Lucida Console", monospace'
+          fill={GOAL_PROMPT_NORMAL_TEXT_COLOR}
+        >
+          <animate
+            attributeName="opacity"
+            values="1;0.35;1"
+            dur={`${showGoalLockedWarning ? GOAL_LOCKED_WARNING_BLINK_DURATION_SEC : GOAL_PROMPT_BLINK_DURATION_SEC}s`}
+            repeatCount="indefinite"
+          />
+          {showGoalLockedWarning ? 'チェックポイントを回収せよ！' : finished ? 'GOAL！' : 'ゴールに向かえ！'}
+        </text>
+      )}
       <rect x={2} y={2} width={VIEWPORT_WIDTH - 4} height={VIEWPORT_HEIGHT - 4} fill="none" stroke={GLOW_COLOR} strokeOpacity={0.55} />
     </svg>
   );

@@ -129,6 +129,10 @@ export const GLOW_COLOR = '#58d47f';
 const CENTER_FRONT_WALL_ASPECT_RATIO = 444 / 328;
 // 最奥正面壁（d3）の縮小率。小さくすると最奥の圧縮感が強くなる。
 const FARTHEST_FRONT_WALL_SCALE = 0.8;
+// ゴール有効時の床ハイライト色。赤系で最終目的地を強調する。
+const GOAL_ACTIVE_FLOOR_COLOR = 'rgba(255, 92, 92, 0.24)';
+// ゴール無効時の床ハイライト色。無彩色でロック状態を示す。
+const GOAL_INACTIVE_FLOOR_COLOR = 'rgba(154, 154, 154, 0.24)';
 // 最奥正面壁の左端座標。側面幅比率（1,1/2,1/3）計算の終点として使う。
 const FARTHEST_FRONT_WALL_LEFT =
   260 -
@@ -686,7 +690,7 @@ class WireframeProjectionBuilder {
     if (!cell) return null;
     if (cell.x === START.x && cell.y === START.y) return 'rgba(140, 230, 255, 0.24)';
     if (cell.x === GOAL.x && cell.y === GOAL.y) {
-      return this.goalActive ? 'rgba(203, 255, 217, 0.24)' : 'rgba(255, 159, 159, 0.24)';
+      return this.goalActive ? GOAL_ACTIVE_FLOOR_COLOR : GOAL_INACTIVE_FLOOR_COLOR;
     }
     const checkpointKey = toCheckpointKey(cell.x, cell.y);
     if (this.checkpointKeySet.has(checkpointKey)) {
