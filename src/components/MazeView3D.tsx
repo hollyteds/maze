@@ -53,16 +53,12 @@ const CAMERA_FOG_FAR = 8.2;
 const WALL_FILL_COLOR = '#0b2117';
 // 壁線分の線色。ワイヤーフレーム感を決める。
 const WALL_EDGE_COLOR = LINE_COLOR;
-// 壁接続柱の太さ。壁厚との比率で調整して隙間を埋める。
-const WALL_PILLAR_SIZE = WORLD_WALL_THICKNESS * 1.8;
-// 円柱柱の分割数。増やすほど円に近づくが描画コストは上がる。
-const WALL_PILLAR_RADIAL_SEGMENTS = 16;
+// 柱の太さ。角で埋もれないよう壁厚よりわずかに太くする。
+const WALL_PILLAR_SIZE = WORLD_WALL_THICKNESS * 1.16;
 // 柱テクスチャの横解像度。低くすると列方向が均一になり継ぎ目が目立ちにくい。
 const WALL_PILLAR_TEXTURE_WIDTH = 8;
 // 柱テクスチャの縦解像度。高くすると横帯の密度を上げられる。
 const WALL_PILLAR_TEXTURE_HEIGHT = 128;
-// 柱を立てる最小接続本数。2以上で「壁と壁の間」とみなす。
-const WALL_PILLAR_MIN_CONNECTION_COUNT = 2;
 // 通常床の色。暗くしすぎると床ハイライトが見えづらくなる。
 const FLOOR_BASE_COLOR = '#05130d';
 // 通常床の透明度。低いほど床が暗く沈む。
@@ -104,13 +100,6 @@ type XZVector = {
 
 // 迷路壁向きの識別子。
 type WallDirection = 'N' | 'E' | 'S' | 'W';
-
-// 壁端点の接続カウント情報。
-type WallEndpointCount = {
-  x: number;
-  z: number;
-  count: number;
-};
 
 // 柱テクスチャのキャッシュ。再生成を避けて描画更新時の負荷を抑える。
 let wallPillarTextureCache: THREE.CanvasTexture | null = null;
@@ -299,66 +288,6 @@ const getWallPillarTexture = (): THREE.CanvasTexture => {
 };
 
 /**
- * 壁端点の座標キーを生成する。
- * @param x 端点のグリッドX
- * @param z 端点のグリッドZ
- * @returns マップキー文字列
- */
-const toWallEndpointKey = (x: number, z: number): string => `${x}:${z}`;
-
-/**
- * 指定端点の接続本数を1つ増やす。
- * @param endpointCountMap 壁端点カウントマップ
- * @param x 端点のグリッドX
- * @param z 端点のグリッドZ
- */
-const incrementWallEndpointCount = (
-  endpointCountMap: Map<string, WallEndpointCount>,
-  x: number,
-  z: number
-) => {
-  const key = toWallEndpointKey(x, z);
-  const existing = endpointCountMap.get(key);
-  if (existing) {
-    existing.count += 1;
-    return;
-  }
-  endpointCountMap.set(key, { x, z, count: 1 });
-};
-
-/**
- * 壁セグメント両端の接続本数をカウントする。
- * @param endpointCountMap 壁端点カウントマップ
- * @param cellX 壁を持つセルX
- * @param cellY 壁を持つセルY
- * @param dir 壁向き
- */
-const registerWallEndpoints = (
-  endpointCountMap: Map<string, WallEndpointCount>,
-  cellX: number,
-  cellY: number,
-  dir: WallDirection
-) => {
-  if (dir === 'N') {
-    incrementWallEndpointCount(endpointCountMap, cellX, cellY);
-    incrementWallEndpointCount(endpointCountMap, cellX + 1, cellY);
-    return;
-  }
-  if (dir === 'S') {
-    incrementWallEndpointCount(endpointCountMap, cellX, cellY + 1);
-    incrementWallEndpointCount(endpointCountMap, cellX + 1, cellY + 1);
-    return;
-  }
-  if (dir === 'W') {
-    incrementWallEndpointCount(endpointCountMap, cellX, cellY);
-    incrementWallEndpointCount(endpointCountMap, cellX, cellY + 1);
-    return;
-  }
-  incrementWallEndpointCount(endpointCountMap, cellX + 1, cellY);
-  incrementWallEndpointCount(endpointCountMap, cellX + 1, cellY + 1);
-};
-
-/**
  * オブジェクト配下のジオメトリ/マテリアルを破棄する。
  * @param root 破棄対象ルート
  */
@@ -455,7 +384,6 @@ const buildMazeWorld = (
 ) => {
   const height = maze.length;
   const width = maze[0]?.length ?? 0;
-  const wallEndpointCountMap = new Map<string, WallEndpointCount>();
   const checkpointKeySet = new Set(
     checkpoints.map((checkpoint) => toCheckpointKey(checkpoint.x, checkpoint.y))
   );
@@ -521,7 +449,6 @@ const buildMazeWorld = (
       (['N', 'E', 'S', 'W'] as WallDirection[]).forEach((dir) => {
         if (!cell.walls[dir]) return;
         if (!shouldDrawWallFromCell(x, y, width, height, dir)) return;
-        registerWallEndpoints(wallEndpointCountMap, x, y, dir);
 
         const isHorizontal = dir === 'N' || dir === 'S';
         const wallGeometry = new THREE.BoxGeometry(
@@ -555,29 +482,25 @@ const buildMazeWorld = (
     }
   }
 
-  wallEndpointCountMap.forEach((endpoint) => {
-    if (endpoint.count < WALL_PILLAR_MIN_CONNECTION_COUNT) return;
-    const pillarRadius = WALL_PILLAR_SIZE / 2;
-    const pillarMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(
-        pillarRadius,
-        pillarRadius,
-        WORLD_WALL_HEIGHT,
-        WALL_PILLAR_RADIAL_SEGMENTS
-      ),
-      new THREE.MeshBasicMaterial({
-        color: '#d8f3df',
-        map: getWallPillarTexture(),
-      })
-    );
-    pillarMesh.position.set(
-      endpoint.x * WORLD_CELL_SIZE,
-      WORLD_WALL_HEIGHT / 2 + WORLD_FLOOR_Y,
-      endpoint.z * WORLD_CELL_SIZE
-    );
-    pillarMesh.userData.kind = 'wall-pillar';
-    root.add(pillarMesh);
-  });
+  // 壁の有無に関係なく全交点へ柱を置き、通路格子の見た目を一貫させる。
+  for (let gridZ = 0; gridZ <= height; gridZ++) {
+    for (let gridX = 0; gridX <= width; gridX++) {
+      const pillarMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(WALL_PILLAR_SIZE, WORLD_WALL_HEIGHT, WALL_PILLAR_SIZE),
+        new THREE.MeshBasicMaterial({
+          color: '#d8f3df',
+          map: getWallPillarTexture(),
+        })
+      );
+      pillarMesh.position.set(
+        gridX * WORLD_CELL_SIZE,
+        WORLD_WALL_HEIGHT / 2 + WORLD_FLOOR_Y,
+        gridZ * WORLD_CELL_SIZE
+      );
+      pillarMesh.userData.kind = 'wall-pillar';
+      root.add(pillarMesh);
+    }
+  }
 };
 
 /**

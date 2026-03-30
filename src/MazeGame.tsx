@@ -59,6 +59,8 @@ export default function MazeGame() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              // 方位コンパスや3Dビュー装飾より前面に固定する。
+              zIndex: 20,
             }}
           >
             <div>
