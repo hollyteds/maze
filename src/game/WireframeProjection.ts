@@ -84,6 +84,7 @@ export type Marker = {
   x: number;
   y: number;
   size: number;
+  depth: number;
   label: 'S' | 'G' | 'C';
   checkpointNumber?: number;
   goalActive?: boolean;
@@ -124,12 +125,6 @@ export const VIEWPORT_HEIGHT = 380;
 export const LINE_COLOR = '#9df7b5';
 // 外枠グローの標準色。
 export const GLOW_COLOR = '#58d47f';
-// 中央床ハイライトの左右インセット率。大きくすると壁際の強調色が減る。
-const CENTER_FLOOR_PATCH_INSET_RATIO = 0.08;
-// 床ハイライトを壁側へわずかに食い込ませる量。隙間対策のため0より大きく維持する。
-const FLOOR_PATCH_EDGE_OVERDRAW = 0.8;
-// 床ハイライトを床面へわずかに下げる量。隙間対策のため0より大きく維持する。
-const FLOOR_PATCH_VERTICAL_OVERDRAW = 0.8;
 // 中央正面壁の共通縦横比（width / height）。変更すると全奥行きの見え方が連動して変わる。
 const CENTER_FRONT_WALL_ASPECT_RATIO = 444 / 328;
 // 最奥正面壁（d3）の縮小率。小さくすると最奥の圧縮感が強くなる。
@@ -278,7 +273,7 @@ class WireframeProjectionBuilder {
       if (rightVisible) {
         this.pushFloorPatchForLane(rightCell, 'right', nearPerspective, farPerspective, depth);
       }
-      this.pushMarkerForCell(cell, centerX, centerY, centerSize);
+      this.pushMarkerForCell(cell, centerX, centerY, centerSize, depth);
 
       // 正面が閉じている場合、このdepthで遮蔽されるため描画を確定して終了する。
       if (frontClosed) {
@@ -288,7 +283,7 @@ class WireframeProjectionBuilder {
         }
         if (shouldDrawLeftSideFront) {
           const markerPoint = this.drawSideFrontWall('left', farPerspective, depth);
-          this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize);
+          this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize, depth);
           actions.push('drawSideFrontWall(left)');
         }
         if (shouldDrawRightSideWall) {
@@ -297,7 +292,7 @@ class WireframeProjectionBuilder {
         }
         if (shouldDrawRightSideFront) {
           const markerPoint = this.drawSideFrontWall('right', farPerspective, depth);
-          this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize);
+          this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize, depth);
           actions.push('drawSideFrontWall(right)');
         }
         // 正面が壁でも左右通路が開いている場合は、その奥の正面壁を探索して描画する。
@@ -338,7 +333,7 @@ class WireframeProjectionBuilder {
       }
       if (shouldDrawLeftSideFront) {
         const markerPoint = this.drawSideFrontWall('left', farPerspective, depth);
-        this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize);
+        this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize, depth);
         actions.push('drawSideFrontWall(left)');
       }
       if (shouldDrawRightSideWall) {
@@ -347,7 +342,7 @@ class WireframeProjectionBuilder {
       }
       if (shouldDrawRightSideFront) {
         const markerPoint = this.drawSideFrontWall('right', farPerspective, depth);
-        this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize);
+        this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize, depth);
         actions.push('drawSideFrontWall(right)');
       }
 
@@ -676,7 +671,7 @@ class WireframeProjectionBuilder {
       const perspective = this.perspectiveByDepthKey[this.getDepthKey(depth + 1)];
       const markerPoint = this.drawSideFrontWall(side, perspective, depth);
       const markerSize = Math.max(7, 14 - depth * 2.1);
-      this.pushMarkerForCell(cell, markerPoint.centerX, markerPoint.centerY, markerSize);
+      this.pushMarkerForCell(cell, markerPoint.centerX, markerPoint.centerY, markerSize, depth);
       actions.push(`drawSideFrontWall(${side},deeperDepth=${depth})`);
       break;
     }
@@ -719,26 +714,49 @@ class WireframeProjectionBuilder {
   ) {
     const floorColor = this.getCellFloorColor(cell);
     if (!floorColor) return;
-    const nearBounds = this.getLaneFloorBounds(nearPerspective, lane);
+    const nearBounds = this.getNearLaneFloorBounds(nearPerspective, lane, depth);
     const farBounds = this.getLaneFloorBounds(farPerspective, lane);
-    const nearWidth = nearBounds.right.x - nearBounds.left.x;
-    const farWidth = farBounds.right.x - farBounds.left.x;
-    // 中央のみ少し内側へ寄せ、左右は壁際まで塗って隙間を防ぐ。
-    const nearInset = lane === 'center' ? nearWidth * CENTER_FLOOR_PATCH_INSET_RATIO : 0;
-    const farInset = lane === 'center' ? farWidth * CENTER_FLOOR_PATCH_INSET_RATIO : 0;
-    const nearLeftX = nearBounds.left.x + nearInset - FLOOR_PATCH_EDGE_OVERDRAW;
-    const nearRightX = nearBounds.right.x - nearInset + FLOOR_PATCH_EDGE_OVERDRAW;
-    const farLeftX = farBounds.left.x + farInset - FLOOR_PATCH_EDGE_OVERDRAW;
-    const farRightX = farBounds.right.x - farInset + FLOOR_PATCH_EDGE_OVERDRAW;
-    // 床の境界と重ねて描くことで、SVGアンチエイリアス由来のヘアライン隙間を抑える。
-    const nearY = (nearBounds.left.y + nearBounds.right.y) / 2 + FLOOR_PATCH_VERTICAL_OVERDRAW;
-    const farY = (farBounds.left.y + farBounds.right.y) / 2 + FLOOR_PATCH_VERTICAL_OVERDRAW;
+    // 床頂点は壁境界座標にそのまま合わせ、座標ズレを作らない。
+    const nearLeftX = nearBounds.left.x;
+    const nearLeftY = nearBounds.left.y;
+    const nearRightX = nearBounds.right.x;
+    const nearRightY = nearBounds.right.y;
+    const farLeftX = farBounds.left.x;
+    const farLeftY = farBounds.left.y;
+    const farRightX = farBounds.right.x;
+    const farRightY = farBounds.right.y;
     this.pushFloorPatch(
-      `${nearLeftX},${nearY} ${nearRightX},${nearY} ${farRightX},${farY} ${farLeftX},${farY}`,
+      `${nearLeftX},${nearLeftY} ${nearRightX},${nearRightY} ${farRightX},${farRightY} ${farLeftX},${farLeftY}`,
       floorColor,
       depth,
       `${lane}-floor-highlight`
     );
+  }
+
+  /**
+   * 手前側のレーン床境界点を返す。
+   * @param perspective 参照元奥行きの基準点
+   * @param lane 取得対象レーン（left/center/right）
+   * @param depth 現在描画中の奥行き
+   * @returns 手前側の床左右境界点
+   */
+  private getNearLaneFloorBounds(
+    perspective: DepthPerspective,
+    lane: FloorLane,
+    depth: number
+  ): { left: Point; right: Point } {
+    // depth0は視点直近なので、側面壁の近端（wallNear）に合わせて下隙間を防ぐ。
+    if (depth === 0) {
+      if (lane === 'left') {
+        return { left: perspective.outerLeft.floor, right: perspective.wallNearLeft.floor };
+      }
+      if (lane === 'right') {
+        return { left: perspective.wallNearRight.floor, right: perspective.outerRight.floor };
+      }
+      return { left: perspective.wallNearLeft.floor, right: perspective.wallNearRight.floor };
+    }
+
+    return this.getLaneFloorBounds(perspective, lane);
   }
 
   /**
@@ -886,12 +904,13 @@ class WireframeProjectionBuilder {
    * @param x マーカー中心X
    * @param y マーカー中心Y
    * @param size マーカー半サイズ
+   * @param depth 描画奥行き深度
    */
-  private pushMarkerForCell(cell: Cell | null, x: number, y: number, size: number) {
+  private pushMarkerForCell(cell: Cell | null, x: number, y: number, size: number, depth: number) {
     if (!cell) return;
-    if (cell.x === START.x && cell.y === START.y) this.markers.push({ x, y, size, label: 'S' });
+    if (cell.x === START.x && cell.y === START.y) this.markers.push({ x, y, size, depth, label: 'S' });
     if (cell.x === GOAL.x && cell.y === GOAL.y) {
-      this.markers.push({ x, y, size, label: 'G', goalActive: this.goalActive });
+      this.markers.push({ x, y, size, depth, label: 'G', goalActive: this.goalActive });
     }
     const checkpointKey = toCheckpointKey(cell.x, cell.y);
     const isCheckpoint = this.checkpointKeySet.has(checkpointKey);
@@ -901,6 +920,7 @@ class WireframeProjectionBuilder {
         x,
         y,
         size: Math.max(6, size - 1),
+        depth,
         label: 'C',
         checkpointNumber,
         checkpointPassed: this.passedCheckpointKeys.has(checkpointKey),

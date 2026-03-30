@@ -27,7 +27,7 @@ const TIMER_INTERVAL_MS = 50;
  */
 const createGameField = (): { maze: Maze; checkpoints: Checkpoint[] } => {
   const maze = generateMaze(MAZE_WIDTH, MAZE_HEIGHT);
-  const checkpoints = generateCheckpoints(MAZE_WIDTH, MAZE_HEIGHT, [GOAL, START]);
+  const checkpoints = generateCheckpoints(maze, [GOAL, START]);
   return { maze, checkpoints };
 };
 

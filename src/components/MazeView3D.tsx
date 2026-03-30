@@ -70,7 +70,21 @@ export function MazeView3D({
           };
         }
       | { key: string; depth: number; kind: 'floor'; part: string; points: string; fill: string }
-      | { key: string; depth: number; kind: 'face'; part: string; points: string; fill: string };
+      | { key: string; depth: number; kind: 'face'; part: string; points: string; fill: string }
+      | {
+          key: string;
+          depth: number;
+          kind: 'markerFrame';
+          part: string;
+          marker: (typeof projection.markers)[number];
+        }
+      | {
+          key: string;
+          depth: number;
+          kind: 'markerText';
+          part: string;
+          marker: (typeof projection.markers)[number];
+        };
 
     const primitives: Primitive[] = [
       ...projection.lines.map((line, index) => ({
@@ -96,11 +110,29 @@ export function MazeView3D({
         points: face.points,
         fill: face.fill,
       })),
+      ...projection.markers.flatMap((marker, index) => [
+        {
+          key: `marker-frame-${index}`,
+          depth: marker.depth,
+          kind: 'markerFrame' as const,
+          part: `marker-frame-${marker.label}`,
+          marker,
+        },
+        {
+          key: `marker-text-${index}`,
+          depth: marker.depth,
+          kind: 'markerText' as const,
+          part: `marker-text-${marker.label}`,
+          marker,
+        },
+      ]),
     ];
     const kindOrder: Record<Primitive['kind'], number> = {
       line: 0,
       floor: 1,
       face: 2,
+      markerFrame: 3,
+      markerText: 4,
     };
     // 同一depthでは側面壁を最前面にするための判定。
     const isSideWallPart = (part: string) => part.includes('-side-wall-');
@@ -109,12 +141,16 @@ export function MazeView3D({
     // さらに側面壁だけは同深度の最上位へ押し上げる。
     return primitives.sort((a, b) => {
       if (a.depth !== b.depth) return b.depth - a.depth;
-      const sideWallBiasA = isSideWallPart(a.part) ? 1 : 0;
-      const sideWallBiasB = isSideWallPart(b.part) ? 1 : 0;
-      if (sideWallBiasA !== sideWallBiasB) return sideWallBiasA - sideWallBiasB;
+      const allowSideWallBiasA = a.kind === 'line' || a.kind === 'floor' || a.kind === 'face';
+      const allowSideWallBiasB = b.kind === 'line' || b.kind === 'floor' || b.kind === 'face';
+      if (allowSideWallBiasA && allowSideWallBiasB) {
+        const sideWallBiasA = isSideWallPart(a.part) ? 1 : 0;
+        const sideWallBiasB = isSideWallPart(b.part) ? 1 : 0;
+        if (sideWallBiasA !== sideWallBiasB) return sideWallBiasA - sideWallBiasB;
+      }
       return kindOrder[a.kind] - kindOrder[b.kind];
     });
-  }, [projection.lines, projection.floorPatches, projection.faces]);
+  }, [projection.lines, projection.floorPatches, projection.faces, projection.markers]);
   // 同一内容のデバッグログを連続出力しないための前回スナップショット。
   const lastDebugSnapshotRef = useRef<string>('');
 
@@ -189,6 +225,62 @@ export function MazeView3D({
               strokeWidth={primitive.line.width}
               strokeLinecap="round"
             />
+          ) : primitive.kind === 'markerFrame' ? (
+            <rect
+              key={primitive.key}
+              x={primitive.marker.x - primitive.marker.size}
+              y={primitive.marker.y - primitive.marker.size}
+              width={primitive.marker.size * 2}
+              height={primitive.marker.size * 2}
+              fill={
+                primitive.marker.label === 'S'
+                  ? '#062218'
+                  : primitive.marker.label === 'C'
+                    ? primitive.marker.checkpointPassed
+                      ? '#1f3328'
+                      : '#3a2d14'
+                    : 'none'
+              }
+              stroke={
+                primitive.marker.label === 'G'
+                  ? primitive.marker.goalActive
+                    ? '#cbffd9'
+                    : '#ff9f9f'
+                  : primitive.marker.label === 'C'
+                    ? primitive.marker.checkpointPassed
+                      ? '#7bb58a'
+                      : '#ffd98c'
+                    : '#8ce6ff'
+              }
+              strokeDasharray={
+                primitive.marker.label === 'G' && !primitive.marker.goalActive ? '3 2' : undefined
+              }
+              strokeWidth={1.2}
+            />
+          ) : primitive.kind === 'markerText' ? (
+            <text
+              key={primitive.key}
+              x={primitive.marker.x}
+              y={primitive.marker.y + primitive.marker.size * 0.35}
+              textAnchor="middle"
+              fontSize={Math.max(9, primitive.marker.size * 1.05)}
+              fontFamily='"Courier New", "Lucida Console", monospace'
+              fill={
+                primitive.marker.label === 'G'
+                  ? primitive.marker.goalActive
+                    ? '#cbffd9'
+                    : '#ff9f9f'
+                  : primitive.marker.label === 'C'
+                    ? primitive.marker.checkpointPassed
+                      ? '#7bb58a'
+                      : '#ffd98c'
+                    : '#8ce6ff'
+              }
+            >
+              {primitive.marker.label === 'C'
+                ? primitive.marker.checkpointNumber ?? 'C'
+                : primitive.marker.label}
+            </text>
           ) : (
             <polygon
               key={primitive.key}
@@ -197,50 +289,6 @@ export function MazeView3D({
             />
           )
         )}
-        {projection.markers.map((marker, index) => (
-          <g key={`marker-${index}`}>
-            <rect
-              x={marker.x - marker.size}
-              y={marker.y - marker.size}
-              width={marker.size * 2}
-              height={marker.size * 2}
-              fill="none"
-              stroke={
-                marker.label === 'G'
-                  ? marker.goalActive
-                    ? '#cbffd9'
-                    : '#ff9f9f'
-                  : marker.label === 'C'
-                    ? marker.checkpointPassed
-                      ? '#7bb58a'
-                      : '#ffd98c'
-                    : '#8ce6ff'
-              }
-              strokeDasharray={marker.label === 'G' && !marker.goalActive ? '3 2' : undefined}
-              strokeWidth={1.2}
-            />
-            <text
-              x={marker.x}
-              y={marker.y + marker.size * 0.35}
-              textAnchor="middle"
-              fontSize={Math.max(9, marker.size * 1.05)}
-              fontFamily='"Courier New", "Lucida Console", monospace'
-              fill={
-                marker.label === 'G'
-                  ? marker.goalActive
-                    ? '#cbffd9'
-                    : '#ff9f9f'
-                  : marker.label === 'C'
-                    ? marker.checkpointPassed
-                      ? '#7bb58a'
-                      : '#ffd98c'
-                    : '#8ce6ff'
-              }
-            >
-              {marker.label === 'C' ? marker.checkpointNumber ?? 'C' : marker.label}
-            </text>
-          </g>
-        ))}
       </g>
       <rect x={2} y={2} width={VIEWPORT_WIDTH - 4} height={VIEWPORT_HEIGHT - 4} fill="none" stroke={GLOW_COLOR} strokeOpacity={0.55} />
     </svg>
