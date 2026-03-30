@@ -18,5 +18,16 @@ export const DIRECTION_LABEL: Record<Direction, string> = {
   W: '西',
 };
 
+// ゴール有効時の強調色。UI全体で共通利用する。
+export const GOAL_ACTIVE_COLOR = '#ff5c5c';
+// ゴール無効時の無彩色。UI全体で共通利用する。
+export const GOAL_INACTIVE_COLOR = '#9a9a9a';
+// ゴール有効時の床ハイライト色。3D/2Dの床強調を揃える。
+export const GOAL_ACTIVE_FLOOR_COLOR = 'rgba(255, 92, 92, 0.24)';
+// ゴール無効時の床ハイライト色。ロック状態の床色を揃える。
+export const GOAL_INACTIVE_FLOOR_COLOR = 'rgba(154, 154, 154, 0.24)';
+// 上部ガイドテキストの通常色。警告表示と区別しない現在仕様に合わせる。
+export const GOAL_PROMPT_TEXT_COLOR = '#cbffd9';
+
 // 3Dビューの壁判定デバッグログ出力フラグ。falseでconsoleログを停止する。
 export const ENABLE_WALL_DEBUG_LOG = false;

@@ -1,6 +1,11 @@
 import { Cell, Maze, PlayerState } from '../mazeUtils';
 import { Checkpoint, toCheckpointKey } from './checkpointUtils';
-import { GOAL, START } from './constants';
+import {
+  GOAL,
+  GOAL_ACTIVE_FLOOR_COLOR,
+  GOAL_INACTIVE_FLOOR_COLOR,
+  START,
+} from './constants';
 import { LEFT_OF, RIGHT_OF } from './playerActions';
 
 // 透視段階ごとの描画枠（近景/遠景）を表す矩形。
@@ -129,10 +134,6 @@ export const GLOW_COLOR = '#58d47f';
 const CENTER_FRONT_WALL_ASPECT_RATIO = 444 / 328;
 // 最奥正面壁（d3）の縮小率。小さくすると最奥の圧縮感が強くなる。
 const FARTHEST_FRONT_WALL_SCALE = 0.8;
-// ゴール有効時の床ハイライト色。赤系で最終目的地を強調する。
-const GOAL_ACTIVE_FLOOR_COLOR = 'rgba(255, 92, 92, 0.24)';
-// ゴール無効時の床ハイライト色。無彩色でロック状態を示す。
-const GOAL_INACTIVE_FLOOR_COLOR = 'rgba(154, 154, 154, 0.24)';
 // 最奥正面壁の左端座標。側面幅比率（1,1/2,1/3）計算の終点として使う。
 const FARTHEST_FRONT_WALL_LEFT =
   260 -
@@ -285,27 +286,32 @@ class WireframeProjectionBuilder {
         this.pushFloorPatchForLane(rightCell, 'right', nearPerspective, farPerspective, depth);
       }
       this.pushMarkerForCell(cell, centerX, centerY, centerSize, depth);
+      // 左右の壁/側面先正面壁の描画は frontClosed の有無に依存しないため先に共通処理化する。
+      this.drawSideElementsAtDepth(
+        'left',
+        shouldDrawLeftSideWall,
+        shouldDrawLeftSideFront,
+        leftCell,
+        sideSize,
+        nearPerspective,
+        farPerspective,
+        depth,
+        actions
+      );
+      this.drawSideElementsAtDepth(
+        'right',
+        shouldDrawRightSideWall,
+        shouldDrawRightSideFront,
+        rightCell,
+        sideSize,
+        nearPerspective,
+        farPerspective,
+        depth,
+        actions
+      );
 
       // 正面が閉じている場合、このdepthで遮蔽されるため描画を確定して終了する。
       if (frontClosed) {
-        if (shouldDrawLeftSideWall) {
-          this.drawSideWall('left', nearPerspective, farPerspective, depth);
-          actions.push('drawSideWall(left)');
-        }
-        if (shouldDrawLeftSideFront) {
-          const markerPoint = this.drawSideFrontWall('left', farPerspective, depth);
-          this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize, depth);
-          actions.push('drawSideFrontWall(left)');
-        }
-        if (shouldDrawRightSideWall) {
-          this.drawSideWall('right', nearPerspective, farPerspective, depth);
-          actions.push('drawSideWall(right)');
-        }
-        if (shouldDrawRightSideFront) {
-          const markerPoint = this.drawSideFrontWall('right', farPerspective, depth);
-          this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize, depth);
-          actions.push('drawSideFrontWall(right)');
-        }
         // 正面が壁でも左右通路が開いている場合は、その奥の正面壁を探索して描画する。
         // なぜ必要か: 奥行き2で側面壁がある構図では、片側開口先の奥行き3壁を補完表示するため。
         if (shouldSearchDeeperLeftSideFront) {
@@ -340,25 +346,6 @@ class WireframeProjectionBuilder {
         });
         this.drawFrontWall(farPerspective, depth);
         break;
-      }
-
-      if (shouldDrawLeftSideWall) {
-        this.drawSideWall('left', nearPerspective, farPerspective, depth);
-        actions.push('drawSideWall(left)');
-      }
-      if (shouldDrawLeftSideFront) {
-        const markerPoint = this.drawSideFrontWall('left', farPerspective, depth);
-        this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize, depth);
-        actions.push('drawSideFrontWall(left)');
-      }
-      if (shouldDrawRightSideWall) {
-        this.drawSideWall('right', nearPerspective, farPerspective, depth);
-        actions.push('drawSideWall(right)');
-      }
-      if (shouldDrawRightSideFront) {
-        const markerPoint = this.drawSideFrontWall('right', farPerspective, depth);
-        this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize, depth);
-        actions.push('drawSideFrontWall(right)');
       }
 
       this.wallJudgements.push({
@@ -690,6 +677,39 @@ class WireframeProjectionBuilder {
       actions.push(`drawSideFrontWall(${side},deeperDepth=${depth})`);
       break;
     }
+  }
+
+  /**
+   * 指定奥行き・片側ぶんの側面要素（側面壁/側面先正面壁）を描画する。
+   * @param side 描画対象側（left/right）
+   * @param shouldDrawSideWall 側面壁を描画するか
+   * @param shouldDrawSideFront 側面先正面壁を描画するか
+   * @param sideCell 対象側セル（マーカー描画に使用）
+   * @param markerSize 側面マーカー半サイズ
+   * @param nearPerspective 手前奥行きの基準点
+   * @param farPerspective 奥奥行きの基準点
+   * @param depth 奥行き深度
+   * @param actions デバッグ用アクション記録先
+   */
+  private drawSideElementsAtDepth(
+    side: 'left' | 'right',
+    shouldDrawSideWall: boolean,
+    shouldDrawSideFront: boolean,
+    sideCell: Cell | null,
+    markerSize: number,
+    nearPerspective: DepthPerspective,
+    farPerspective: DepthPerspective,
+    depth: number,
+    actions: string[]
+  ) {
+    if (shouldDrawSideWall) {
+      this.drawSideWall(side, nearPerspective, farPerspective, depth);
+      actions.push(`drawSideWall(${side})`);
+    }
+    if (!shouldDrawSideFront) return;
+    const markerPoint = this.drawSideFrontWall(side, farPerspective, depth);
+    this.pushMarkerForCell(sideCell, markerPoint.centerX, markerPoint.centerY, markerSize, depth);
+    actions.push(`drawSideFrontWall(${side})`);
   }
 
   /**

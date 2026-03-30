@@ -24,7 +24,7 @@
 | チェックポイント生成 | `src/game/checkpointUtils.ts` | チェックポイント数算出とランダム配置 |
 | 描画コンポーネント | `src/components/MazeView3D.tsx` ほか | 受け取ったデータをSVGとして描画 |
 | プレイヤー移動ロジック | `src/game/playerActions.ts` | 回転・前進判定 |
-| 共通定数 | `src/game/constants.ts` | 迷路サイズ、S/G座標、方角ラベル |
+| 共通定数 | `src/game/constants.ts` | 迷路サイズ、S/G座標、方角ラベル、ゴール配色、デバッグ設定 |
 | 迷路生成 | `src/mazeUtils.ts` | DFSベースの迷路生成、初期プレイヤー状態 |
 
 ## 全体フロー
@@ -67,11 +67,11 @@ flowchart TD
   C -->|Yes| D[drawFrontWallして終了]
   C -->|No| E[S/G/Cマーカー判定]
   E --> F[front/left/right壁状態を判定]
-  F --> G{frontClosedか}
-  G -->|Yes| H[左右側面と側面先正面壁を必要分描画]
-  H --> I[drawFrontWallして終了]
-  G -->|No| J[左右側面と側面先正面壁を必要分描画]
-  J --> K[次depthへ]
+  F --> G[左右側面と側面先正面壁を必要分描画]
+  G --> H{frontClosedか}
+  H -->|Yes| I[必要なら奥側の側面先正面壁を探索描画]
+  I --> J[drawFrontWallして終了]
+  H -->|No| K[次depthへ]
 ```
 
 ## 定数一覧
@@ -80,11 +80,17 @@ flowchart TD
 
 | 定数 | 値 | 意味 |
 |---|---:|---|
-| `MAZE_WIDTH` | `30` | 迷路の横マス数 |
-| `MAZE_HEIGHT` | `10` | 迷路の縦マス数 |
+| `MAZE_WIDTH` | `15` | 迷路の横マス数 |
+| `MAZE_HEIGHT` | `15` | 迷路の縦マス数 |
 | `START` | `{x: 0, y: 0}` | スタート座標 |
 | `GOAL` | `{x: MAZE_WIDTH - 1, y: MAZE_HEIGHT - 1}` | ゴール座標 |
 | `DIRECTION_LABEL` | `N/E/S/W -> 北/東/南/西` | UI表示用の方角ラベル |
+| `GOAL_ACTIVE_COLOR` | `#ff5c5c` | ゴール有効時の強調色 |
+| `GOAL_INACTIVE_COLOR` | `#9a9a9a` | ゴール無効時の無彩色 |
+| `GOAL_ACTIVE_FLOOR_COLOR` | `rgba(255, 92, 92, 0.24)` | ゴール有効時の床ハイライト色 |
+| `GOAL_INACTIVE_FLOOR_COLOR` | `rgba(154, 154, 154, 0.24)` | ゴール無効時の床ハイライト色 |
+| `GOAL_PROMPT_TEXT_COLOR` | `#cbffd9` | 上部ガイドテキスト色 |
+| `ENABLE_WALL_DEBUG_LOG` | `false` | 壁判定デバッグログの有効フラグ |
 
 ## `src/game/checkpointUtils.ts`
 
@@ -109,7 +115,7 @@ flowchart TD
 | `LINE_COLOR` | `#9df7b5` | ワイヤー線色 |
 | `GLOW_COLOR` | `#58d47f` | 枠線グロー色 |
 | `viewDepth` | `3` | 可視深度（前方3マス） |
-| `frames` | 4段階矩形 | 疑似透視の近景〜遠景フレーム |
+| `frameByDepthKey` | 4段階矩形 | 疑似透視の近景〜遠景フレーム |
 
 ## `src/mazeUtils.ts`
 
@@ -139,8 +145,8 @@ flowchart TD
 
 - `getCheckpointCount(width, height)`
   - 30マスにつき1つの比率でチェックポイント数を算出する（最低1）。
-- `generateCheckpoints(width, height, excluded)`
-  - 除外セル（START/GOAL）を除いた座標からランダム配置し、`1..N` の番号を付与する。
+- `generateCheckpoints(maze, excluded)`
+  - 除外セル（START/GOAL）を除き、袋小路セルを優先してランダム配置し、`1..N` の番号を付与する。
 - `toCheckpointKey(x, y)`
   - 座標をキー文字列へ変換する。
 
@@ -157,13 +163,17 @@ flowchart TD
   - 範囲内セルを返す（範囲外は `null`）。
 - `getRelativeCell(sideOffset, forwardOffset)`
   - プレイヤー向きを基準に相対セルを取得する。
-- `drawFrontWall(frame, depth)`
+- `drawFrontWall(perspective, depth)`
   - 正面壁の面と輪郭線を追加する。
-- `drawSideWall(side, nearFrame, farFrame, depth, flushToCanvas)`
+- `drawSideWall(side, nearPerspective, farPerspective, depth)`
   - 側面壁（台形）を追加する。
-- `drawSideFrontWall(side, nearFrame, farFrame, depth, flushToCanvas)`
+- `drawSideFrontWall(side, farPerspective, depth)`
   - 側面先の正面壁を追加し、マーカー中心点を返す。
-- `pushMarkerForCell(cell, x, y, size)`
+- `drawDeeperSideFrontWall(side, startDepth, actions)`
+  - 側方通路の奥にある正面壁を可視範囲内で探索して描画する。
+- `drawSideElementsAtDepth(side, shouldDrawSideWall, shouldDrawSideFront, sideCell, markerSize, nearPerspective, farPerspective, depth, actions)`
+  - 片側ぶんの側面壁/側面先正面壁を共通処理で描画する。
+- `pushMarkerForCell(cell, x, y, size, depth)`
   - 対象セルがスタート/ゴール/チェックポイントならマーカー追加。
 - `toCellWallDebug(cell)`
   - デバッグ出力用に壁情報を整形。
@@ -181,8 +191,8 @@ flowchart TD
 
 ## `src/components/MazeView3D.tsx`
 
-- `MazeView3D({ maze, player, checkpoints, passedCheckpointKeys, goalActive })`
-  - 投影データをSVGとして描画し、ゴールLOCKED/ACTIVEとチェックポイント番号・通過状態を反映する。
+- `MazeView3D({ maze, player, checkpoints, passedCheckpointKeys, goalActive, finished })`
+  - 投影データをSVGとして描画し、ゴールLOCKED/ACTIVE・チェックポイント番号/通過状態・上部ガイド（ゴール誘導/警告/GOAL表示）を反映する。
 
 ## `src/components/HelpMap.tsx`
 
@@ -220,6 +230,6 @@ flowchart TD
 
 ## 補足
 
-- 3D描画は厳密な行列投影ではなく、`frames` を用いた疑似透視方式。
+- 3D描画は厳密な行列投影ではなく、`frameByDepthKey` を用いた疑似透視方式。
 - 移動可否の正規判定元は `maze[y][x].walls[dir]`。
-- 開発時の可視判定検証は `MazeView3D` の `wall-debug` ログを利用する。
+- 開発時の可視判定検証は `MazeView3D` の `wall-debug` ログを利用する（`ENABLE_WALL_DEBUG_LOG` が `true` の場合のみ）。

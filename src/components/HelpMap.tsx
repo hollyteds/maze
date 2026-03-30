@@ -1,16 +1,14 @@
 import React from 'react';
-import { GOAL, START } from '../game/constants';
+import {
+  GOAL,
+  GOAL_ACTIVE_COLOR,
+  GOAL_ACTIVE_FLOOR_COLOR,
+  GOAL_INACTIVE_COLOR,
+  GOAL_INACTIVE_FLOOR_COLOR,
+  START,
+} from '../game/constants';
 import { Checkpoint, toCheckpointKey } from '../game/checkpointUtils';
 import { Maze, PlayerState } from '../mazeUtils';
-
-// ゴール有効時の色。赤で到達目標を強調する。
-const GOAL_ACTIVE_COLOR = '#ff5c5c';
-// ゴール無効時の色。無彩色でロック状態を示す。
-const GOAL_INACTIVE_COLOR = '#9a9a9a';
-// ゴール有効時の床ハイライト色。
-const GOAL_ACTIVE_FLOOR_COLOR = 'rgba(255, 92, 92, 0.24)';
-// ゴール無効時の床ハイライト色。
-const GOAL_INACTIVE_FLOOR_COLOR = 'rgba(154, 154, 154, 0.24)';
 
 // HelpMapコンポーネントの入力プロパティ。
 type HelpMapProps = {

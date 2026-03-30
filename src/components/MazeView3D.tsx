@@ -7,7 +7,13 @@ import {
   VIEWPORT_WIDTH,
 } from '../game/WireframeProjection';
 import { Checkpoint } from '../game/checkpointUtils';
-import { ENABLE_WALL_DEBUG_LOG, GOAL } from '../game/constants';
+import {
+  ENABLE_WALL_DEBUG_LOG,
+  GOAL,
+  GOAL_ACTIVE_COLOR,
+  GOAL_INACTIVE_COLOR,
+  GOAL_PROMPT_TEXT_COLOR,
+} from '../game/constants';
 import { Maze, PlayerState } from '../mazeUtils';
 
 // ゴール解放メッセージの点滅周期（秒）。小さいほど点滅が速くなる。
@@ -16,12 +22,6 @@ const GOAL_PROMPT_BLINK_DURATION_SEC = 0.9;
 const GOAL_LOCKED_WARNING_BLINK_DURATION_SEC = 0.35;
 // ゴール未解放時にゴール通過警告を表示する時間（ミリ秒）。
 const GOAL_LOCKED_WARNING_DURATION_MS = 3000;
-// ゴール有効時の強調色。危険色で目立たせる。
-const GOAL_ACTIVE_COLOR = '#ff5c5c';
-// ゴール無効時の無彩色。ロック状態を明確化する。
-const GOAL_INACTIVE_COLOR = '#9a9a9a';
-// 通常ガイド表示の文字色。警告でない状態で使う。
-const GOAL_PROMPT_NORMAL_TEXT_COLOR = '#cbffd9';
 
 // MazeView3Dコンポーネントの入力プロパティ。
 type MazeView3DProps = {
@@ -271,6 +271,35 @@ export function MazeView3D({
     console.log('[MazeView3D] wall-debug', debugPayload);
   }, [maze, player.x, player.y, player.dir, projection]);
 
+  // 投影マーカー型の短縮名。色計算ヘルパーで使う。
+  type ProjectionMarker = (typeof projection.markers)[number];
+
+  /**
+   * マーカー枠/文字の描画色をラベル別に返す。
+   * @param marker 対象マーカー
+   * @returns マーカーの表示色
+   */
+  const getMarkerColor = (marker: ProjectionMarker): string => {
+    if (marker.label === 'G') {
+      return marker.goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR;
+    }
+    if (marker.label === 'C') {
+      return marker.checkpointPassed ? '#7bb58a' : '#ffd98c';
+    }
+    return '#8ce6ff';
+  };
+
+  /**
+   * マーカー枠の塗り色をラベル別に返す。
+   * @param marker 対象マーカー
+   * @returns マーカー枠の塗り色
+   */
+  const getMarkerFrameFill = (marker: ProjectionMarker): string => {
+    if (marker.label === 'S') return '#062218';
+    if (marker.label === 'C') return marker.checkpointPassed ? '#1f3328' : '#3a2d14';
+    return 'none';
+  };
+
   return (
     <svg width={VIEWPORT_WIDTH} height={VIEWPORT_HEIGHT} style={{ background: '#020503', borderRadius: 4, display: 'block' }}>
       <defs>
@@ -303,26 +332,8 @@ export function MazeView3D({
               y={primitive.marker.y - primitive.marker.size}
               width={primitive.marker.size * 2}
               height={primitive.marker.size * 2}
-              fill={
-                primitive.marker.label === 'S'
-                  ? '#062218'
-                  : primitive.marker.label === 'C'
-                    ? primitive.marker.checkpointPassed
-                      ? '#1f3328'
-                      : '#3a2d14'
-                    : 'none'
-              }
-              stroke={
-                primitive.marker.label === 'G'
-                  ? primitive.marker.goalActive
-                    ? GOAL_ACTIVE_COLOR
-                    : GOAL_INACTIVE_COLOR
-                  : primitive.marker.label === 'C'
-                    ? primitive.marker.checkpointPassed
-                      ? '#7bb58a'
-                      : '#ffd98c'
-                    : '#8ce6ff'
-              }
+              fill={getMarkerFrameFill(primitive.marker)}
+              stroke={getMarkerColor(primitive.marker)}
               strokeDasharray={
                 primitive.marker.label === 'G' && !primitive.marker.goalActive ? '3 2' : undefined
               }
@@ -336,17 +347,7 @@ export function MazeView3D({
               textAnchor="middle"
               fontSize={Math.max(9, primitive.marker.size * 1.05)}
               fontFamily='"Courier New", "Lucida Console", monospace'
-              fill={
-                primitive.marker.label === 'G'
-                  ? primitive.marker.goalActive
-                    ? GOAL_ACTIVE_COLOR
-                    : GOAL_INACTIVE_COLOR
-                  : primitive.marker.label === 'C'
-                    ? primitive.marker.checkpointPassed
-                      ? '#7bb58a'
-                      : '#ffd98c'
-                    : '#8ce6ff'
-              }
+              fill={getMarkerColor(primitive.marker)}
             >
               {primitive.marker.label === 'C'
                 ? primitive.marker.checkpointNumber ?? 'C'
@@ -368,7 +369,7 @@ export function MazeView3D({
           textAnchor="middle"
           fontSize={15}
           fontFamily='"Courier New", "Lucida Console", monospace'
-          fill={GOAL_PROMPT_NORMAL_TEXT_COLOR}
+          fill={GOAL_PROMPT_TEXT_COLOR}
         >
           <animate
             attributeName="opacity"

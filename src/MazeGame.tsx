@@ -2,14 +2,10 @@ import React from 'react';
 import { CompassOverlay } from './components/CompassOverlay';
 import { HelpMap } from './components/HelpMap';
 import { MazeView3D } from './components/MazeView3D';
+import { GOAL_ACTIVE_COLOR, GOAL_INACTIVE_COLOR } from './game/constants';
 import { toCheckpointKey } from './game/checkpointUtils';
 import { VIEWPORT_WIDTH } from './game/WireframeProjection';
 import { useMazeGameController } from './hooks/useMazeGameController';
-
-// ゴール有効時の表示色。赤でアクティブ状態を明確化する。
-const GOAL_ACTIVE_COLOR = '#ff5c5c';
-// ゴール無効時の表示色。無彩色でロック状態を示す。
-const GOAL_INACTIVE_COLOR = '#9a9a9a';
 
 /**
  * 迷路ゲームの画面レイアウトを構成する。
