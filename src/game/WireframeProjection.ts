@@ -42,20 +42,10 @@ type DepthLane =
 type DepthPerspective = Record<DepthLane, CeilingFloorPoint>;
 
 // 透視座標を参照するための奥行きキー。
-type PerspectiveDepthKey = 'd0' | 'd1' | 'd2' | 'd3';
+type PerspectiveDepthKey = `d${number}`;
 
 // 床ハイライトの対象レーン識別子。
 type FloorLane = 'left' | 'center' | 'right';
-
-// 共通アスペクト比でフレームを生成するための入力仕様。
-type FrameSpec = {
-  centerX: number;
-  centerY: number;
-  height: number;
-};
-
-// 奥行きキーの並び順。値を変えると描画距離の対応関係が変わる。
-const DEPTH_KEY_ORDER: PerspectiveDepthKey[] = ['d0', 'd1', 'd2', 'd3'];
 
 // ワイヤーフレーム線分の描画情報。
 export type WireLine = {
@@ -126,48 +116,100 @@ export type WireframeProjection = {
 export const VIEWPORT_WIDTH = 520;
 // 3DビューのSVG縦幅（px）。
 export const VIEWPORT_HEIGHT = 380;
+// 最大可視深度（前方Nマス）。奥行きはこの定数1つで管理する。
+export const VIEW_DEPTH = 5;
 // ワイヤー線の標準色。
 export const LINE_COLOR = '#9df7b5';
 // 外枠グローの標準色。
 export const GLOW_COLOR = '#58d47f';
 // 中央正面壁の共通縦横比（width / height）。変更すると全奥行きの見え方が連動して変わる。
 const CENTER_FRONT_WALL_ASPECT_RATIO = 444 / 328;
-// 最奥正面壁（d3）の縮小率。小さくすると最奥の圧縮感が強くなる。
-const FARTHEST_FRONT_WALL_SCALE = 0.8;
-// 最奥正面壁の左端座標。側面幅比率（1,1/2,1/3）計算の終点として使う。
+// 最奥正面壁（dN）の縮小率。小さくすると最奥の圧縮感が強くなる。
+const FARTHEST_FRONT_WALL_SCALE = 0.2;
+// 最奥正面壁の左端座標。側面幅比率（1,1/2,...,1/N）計算の終点として使う。
 const FARTHEST_FRONT_WALL_LEFT =
   260 -
   ((138 * FARTHEST_FRONT_WALL_SCALE) * CENTER_FRONT_WALL_ASPECT_RATIO) / 2;
-// 側面幅の比率和。1 + 1/2 + 1/3 を使って基準幅を逆算する。
-const SIDE_WALL_RATIO_SUM = 1 + 1 / 2 + 1 / 3;
-// 手前側面の基準幅。これを 1,1/2,1/3 に分配して奥行き幅を決める。
+// 1..N の逆数和（調和級数）を返す。
+// なぜ必要か: 側面幅比率 1,1/2,...,1/N の合計を可視深度に応じて計算するため。
+const getHarmonicSum = (depth: number): number => {
+  let sum = 0;
+  for (let i = 1; i <= depth; i++) {
+    sum += 1 / i;
+  }
+  return sum;
+};
+// 側面幅の比率和。1 + 1/2 + ... + 1/N を使って基準幅を逆算する。
+const SIDE_WALL_RATIO_SUM = getHarmonicSum(VIEW_DEPTH);
+// 手前側面の基準幅。これを 1,1/2,...,1/N に分配して奥行き幅を決める。
 const SIDE_WALL_BASE_SPAN = (FARTHEST_FRONT_WALL_LEFT - 2) / SIDE_WALL_RATIO_SUM;
-// d1左端。これが depth0 側面の終端になり、以降の連続境界の起点になる。
-const D1_FRONT_WALL_LEFT = 2 + SIDE_WALL_BASE_SPAN;
-// d2左端。d1から基準幅の1/2だけ奥へ進める。
-const D2_FRONT_WALL_LEFT = D1_FRONT_WALL_LEFT + SIDE_WALL_BASE_SPAN / 2;
-// 各奥行きで使うフレーム中心と高さ。縦横比は上記定数で統一計算する。
-// d1/d2高さは「側面幅が手前から 1, 1/2, 1/3 で連続する」よう調整済み。
-const FRAME_SPEC_BY_DEPTH_KEY: Record<PerspectiveDepthKey, FrameSpec> = {
-  d0: { centerX: 260, centerY: 190, height: 328 },
-  d1: {
-    centerX: 260,
-    centerY: 193,
-    height: (VIEWPORT_WIDTH - D1_FRONT_WALL_LEFT * 2) / CENTER_FRONT_WALL_ASPECT_RATIO,
-  },
-  d2: {
-    centerX: 260,
-    centerY: 195.5,
-    height: (VIEWPORT_WIDTH - D2_FRONT_WALL_LEFT * 2) / CENTER_FRONT_WALL_ASPECT_RATIO,
-  },
-  d3: { centerX: 260, centerY: 197, height: 138 * FARTHEST_FRONT_WALL_SCALE },
+// 壁塗り色の基準色。depth=0 の面色として使う。
+const WALL_FILL_BASE_COLOR = '#0b2117';
+// 最遠depthでの明度倍率。小さいほど奥が暗くなる。
+const WALL_FILL_MIN_BRIGHTNESS_RATIO = 0.55;
+
+/**
+ * 16進カラー文字列をRGB成分へ変換する。
+ * @param hex `#rrggbb` 形式のカラー文字列
+ * @returns RGB成分（0-255）
+ */
+const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
+  const normalized = hex.replace('#', '');
+  if (normalized.length !== 6) {
+    return { r: 0, g: 0, b: 0 };
+  }
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16),
+  };
+};
+
+/**
+ * RGB成分を `#rrggbb` 形式の文字列へ変換する。
+ * @param r 赤成分（0-255）
+ * @param g 緑成分（0-255）
+ * @param b 青成分（0-255）
+ * @returns 16進カラー文字列
+ */
+const rgbToHex = (r: number, g: number, b: number): string => {
+  const toHex = (value: number): string =>
+    Math.max(0, Math.min(255, Math.round(value)))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+};
+
+/**
+ * 基準色と明度倍率から壁塗り色を計算する。
+ * @param baseHex 基準色（`#rrggbb`）
+ * @param brightness 明度倍率（0以上）
+ * @returns 明度調整後のカラー文字列
+ */
+const scaleWallFillColor = (baseHex: string, brightness: number): string => {
+  const { r, g, b } = hexToRgb(baseHex);
+  return rgbToHex(r * brightness, g * brightness, b * brightness);
+};
+
+/**
+ * 深度数に応じた壁塗り色配列を生成する。
+ * @param depthCount 可視depth数
+ * @returns depth順の塗り色配列（0が手前）
+ */
+const createWallFillByDepth = (depthCount: number): string[] => {
+  if (depthCount <= 1) return [WALL_FILL_BASE_COLOR];
+  return Array.from({ length: depthCount }, (_, depth) => {
+    const t = depth / (depthCount - 1);
+    const brightness = 1 - (1 - WALL_FILL_MIN_BRIGHTNESS_RATIO) * t;
+    return scaleWallFillColor(WALL_FILL_BASE_COLOR, brightness);
+  });
 };
 
 class WireframeProjectionBuilder {
-  // 最大可視深度（前方3マス）。
-  private readonly viewDepth = 3;
-  // 奥行きごとの壁塗り色。
-  private readonly wallFillByDepth = ['#0b2117', '#091b13', '#07160f'];
+  // 最大可視深度（前方Nマス）。VIEW_DEPTH から取り込む。
+  private readonly viewDepth = VIEW_DEPTH;
+  // 奥行きごとの壁塗り色。基準色から明度を段階的に減衰させて生成する。
+  private readonly wallFillByDepth: string[];
   // 疑似透視に使う基準フレーム定義（キー: 奥行き段階）。
   private readonly frameByDepthKey: Record<PerspectiveDepthKey, Frame>;
   // 奥行きキー×左右レーンの天井/床基準点テーブル。
@@ -202,6 +244,7 @@ class WireframeProjectionBuilder {
     private readonly passedCheckpointKeys: Set<string>,
     private readonly goalActive: boolean
   ) {
+    this.wallFillByDepth = createWallFillByDepth(this.viewDepth);
     this.frameByDepthKey = this.createFrameByDepthKey();
     this.checkpointKeySet = new Set(
       checkpoints.map((checkpoint) => toCheckpointKey(checkpoint.x, checkpoint.y))
@@ -382,16 +425,23 @@ class WireframeProjectionBuilder {
   }
 
   /**
-   * 数値depthを透視テーブル参照用キーへ変換する。
+   * 数値depthから透視テーブル用キーを生成する。
+   * @param depth 変換対象の奥行きインデックス
+   * @returns `d{depth}` 形式のキー
+   */
+  private toDepthKey(depth: number): PerspectiveDepthKey {
+    return `d${depth}` as PerspectiveDepthKey;
+  }
+
+  /**
+   * 数値depthを透視テーブル参照用キーへ変換する（範囲外はクランプ）。
    * @param depth 参照したい奥行きインデックス
    * @returns 透視基準点テーブルの奥行きキー
    */
   private getDepthKey(depth: number): PerspectiveDepthKey {
     // 表示可能範囲外のdepthは最奥キーへ寄せて参照を安定化する。
-    if (depth <= 0) return 'd0';
-    if (depth === 1) return 'd1';
-    if (depth === 2) return 'd2';
-    return 'd3';
+    const clampedDepth = Math.max(0, Math.min(depth, this.viewDepth));
+    return this.toDepthKey(clampedDepth);
   }
 
   /**
@@ -400,17 +450,37 @@ class WireframeProjectionBuilder {
    */
   private createFrameByDepthKey(): Record<PerspectiveDepthKey, Frame> {
     const frames = {} as Record<PerspectiveDepthKey, Frame>;
+    // 手前フレーム（d0）の基準値。
+    const nearHeight = 328;
+    const nearCenterY = 190;
+    // 最奥フレーム（dN）の基準値。
+    const farHeight = 138 * FARTHEST_FRONT_WALL_SCALE;
+    const farCenterY = 197;
 
-    DEPTH_KEY_ORDER.forEach((depthKey) => {
-      const spec = FRAME_SPEC_BY_DEPTH_KEY[depthKey];
-      const width = spec.height * CENTER_FRONT_WALL_ASPECT_RATIO;
+    for (let depth = 0; depth <= this.viewDepth; depth++) {
+      const depthKey = this.toDepthKey(depth);
+      const centerY =
+        nearCenterY + ((farCenterY - nearCenterY) * depth) / this.viewDepth;
+      let height = nearHeight;
+      if (depth === this.viewDepth) {
+        height = farHeight;
+      } else if (depth > 0) {
+        // 側面幅が 1,1/2,... で連続するよう、left境界を調和級数で進める。
+        let accumulatedSideSpan = 0;
+        for (let i = 1; i <= depth; i++) {
+          accumulatedSideSpan += SIDE_WALL_BASE_SPAN / i;
+        }
+        const left = 2 + accumulatedSideSpan;
+        height = (VIEWPORT_WIDTH - left * 2) / CENTER_FRONT_WALL_ASPECT_RATIO;
+      }
+      const width = height * CENTER_FRONT_WALL_ASPECT_RATIO;
       frames[depthKey] = {
-        left: spec.centerX - width / 2,
-        right: spec.centerX + width / 2,
-        top: spec.centerY - spec.height / 2,
-        bottom: spec.centerY + spec.height / 2,
+        left: 260 - width / 2,
+        right: 260 + width / 2,
+        top: centerY - height / 2,
+        bottom: centerY + height / 2,
       };
-    });
+    }
 
     return frames;
   }
@@ -422,15 +492,16 @@ class WireframeProjectionBuilder {
   private createPerspectiveByDepthKey(): Record<PerspectiveDepthKey, DepthPerspective> {
     const perspectives = {} as Record<PerspectiveDepthKey, DepthPerspective>;
     // 側面壁の基準幅。depth0の左側で「画面端(2)→d1左端」までを基準にする。
-    const sideWallBaseSpan = this.frameByDepthKey.d1.left - 2;
+    const sideWallBaseSpan = this.frameByDepthKey[this.getDepthKey(1)].left - 2;
 
-    DEPTH_KEY_ORDER.forEach((depthKey, depthIndex) => {
+    for (let depthIndex = 0; depthIndex <= this.viewDepth; depthIndex++) {
+      const depthKey = this.getDepthKey(depthIndex);
       const frame = this.frameByDepthKey[depthKey];
       const centerX = (frame.left + frame.right) / 2;
       const centerWidth = frame.right - frame.left;
       const outerLeftX = frame.left - centerWidth;
       const outerRightX = frame.right + centerWidth;
-      const nextDepthKey = DEPTH_KEY_ORDER[Math.min(depthIndex + 1, DEPTH_KEY_ORDER.length - 1)];
+      const nextDepthKey = this.getDepthKey(depthIndex + 1);
       const nextFrame = this.frameByDepthKey[nextDepthKey];
 
       // 側面壁の幅はdepthごとに 1, 1/2, 1/3 ... へ縮小する。
@@ -505,7 +576,7 @@ class WireframeProjectionBuilder {
           wallNearRightBottom
         ),
       };
-    });
+    }
 
     return perspectives;
   }
