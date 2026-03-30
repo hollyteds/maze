@@ -11,6 +11,8 @@ type MazeGameController = {
   elapsed: number;
   finished: boolean;
   showHelpMap: boolean;
+  visitedCellKeys: Set<string>;
+  revealHiddenMapForDebug: boolean;
   checkpoints: Checkpoint[];
   passedCheckpointKeys: Set<string>;
   passedCheckpointCount: number;
@@ -20,6 +22,8 @@ type MazeGameController = {
 
 // タイマーの更新間隔（ミリ秒）。細かすぎる再描画を避けつつ体感を維持する。
 const TIMER_INTERVAL_MS = 50;
+// ヘルプマップの隠し領域をデバッグ表示へ切り替えるキー。
+const MAP_DEBUG_REVEAL_KEY = 'd';
 
 /**
  * 初期ゲーム状態（迷路とチェックポイント）を生成する。
@@ -30,6 +34,13 @@ const createGameField = (): { maze: Maze; checkpoints: Checkpoint[] } => {
   const checkpoints = generateCheckpoints(maze, [GOAL, START]);
   return { maze, checkpoints };
 };
+
+/**
+ * 訪問済みセル集合の初期値（STARTのみ）を返す。
+ * @returns START座標キーだけを含む集合
+ */
+const createInitialVisitedCellKeys = (): Set<string> =>
+  new Set([toCheckpointKey(START.x, START.y)]);
 
 /**
  * ゲーム状態（移動・タイマー・クリア判定）を一元管理するカスタムフック。
@@ -44,6 +55,12 @@ export const useMazeGameController = (): MazeGameController => {
   const [player, setPlayer] = useState<PlayerState>(getInitialPlayerState());
   // 現在ゲームに配置されたチェックポイント一覧。
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>(initialField.checkpoints);
+  // 訪問済みセルの座標キー集合。
+  const [visitedCellKeys, setVisitedCellKeys] = useState<Set<string>>(
+    createInitialVisitedCellKeys
+  );
+  // ヘルプマップで隠し領域を開示するデバッグ表示フラグ。
+  const [revealHiddenMapForDebug, setRevealHiddenMapForDebug] = useState(false);
   // 通過済みチェックポイントの座標キー集合。
   const [passedCheckpointKeys, setPassedCheckpointKeys] = useState<Set<string>>(() => new Set());
   // スタート時刻。未開始時は null。
@@ -90,6 +107,12 @@ export const useMazeGameController = (): MazeGameController => {
         if (!e.repeat) setShowHelpMap((visible) => !visible);
         return;
       }
+      // ヘルプマップ表示中のみデバッグ開示トグルを受け付ける。
+      if (showHelpMap && (e.key === MAP_DEBUG_REVEAL_KEY || e.key === MAP_DEBUG_REVEAL_KEY.toUpperCase())) {
+        e.preventDefault();
+        if (!e.repeat) setRevealHiddenMapForDebug((visible) => !visible);
+        return;
+      }
       // ヘルプ表示中は移動操作を無効化する。
       if (showHelpMap) return;
 
@@ -106,6 +129,14 @@ export const useMazeGameController = (): MazeGameController => {
 
       if (next !== player) {
         setPlayer(next);
+        // 移動先セルを訪問済みへ追加し、ヘルプマップ開示対象として保持する。
+        setVisitedCellKeys((prev) => {
+          const key = toCheckpointKey(next.x, next.y);
+          if (prev.has(key)) return prev;
+          const updated = new Set(prev);
+          updated.add(key);
+          return updated;
+        });
         // 新しい位置がチェックポイントなら通過済み集合へ追加する。
         const checkpointKey = toCheckpointKey(next.x, next.y);
         setPassedCheckpointKeys((prev) => {
@@ -134,6 +165,8 @@ export const useMazeGameController = (): MazeGameController => {
     const nextField = createGameField();
     setMaze(nextField.maze);
     setCheckpoints(nextField.checkpoints);
+    setVisitedCellKeys(createInitialVisitedCellKeys());
+    setRevealHiddenMapForDebug(false);
     setPassedCheckpointKeys(new Set());
     setPlayer(getInitialPlayerState());
     setStartTime(null);
@@ -148,6 +181,8 @@ export const useMazeGameController = (): MazeGameController => {
     elapsed,
     finished,
     showHelpMap,
+    visitedCellKeys,
+    revealHiddenMapForDebug,
     checkpoints,
     passedCheckpointKeys,
     passedCheckpointCount,

@@ -19,6 +19,8 @@ export default function MazeGame() {
     elapsed,
     finished,
     showHelpMap,
+    visitedCellKeys,
+    revealHiddenMapForDebug,
     checkpoints,
     passedCheckpointKeys,
     passedCheckpointCount,
@@ -65,9 +67,13 @@ export default function MazeGame() {
                 player={player}
                 checkpoints={checkpoints}
                 passedCheckpointKeys={passedCheckpointKeys}
+                visitedCellKeys={visitedCellKeys}
+                revealHiddenMapForDebug={revealHiddenMapForDebug}
                 goalActive={goalActive}
               />
-              <p style={{ marginTop: 10, marginBottom: 0, fontSize: 13, color: '#cbffd9' }}>H: CLOSE HELP MAP</p>
+              <p style={{ marginTop: 10, marginBottom: 0, fontSize: 13, color: '#cbffd9' }}>
+                H: CLOSE HELP MAP / D: TOGGLE DEBUG REVEAL
+              </p>
             </div>
           </div>
         )}

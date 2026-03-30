@@ -20,6 +20,10 @@ type HelpMapProps = {
   checkpoints: Checkpoint[];
   // 通過済みチェックポイント座標キー集合。
   passedCheckpointKeys: Set<string>;
+  // 訪問済みセル座標キー集合。
+  visitedCellKeys: Set<string>;
+  // 未訪問領域も含めて全体を表示するデバッグフラグ。
+  revealHiddenMapForDebug: boolean;
   // ゴールが有効化済みかどうか。
   goalActive: boolean;
 };
@@ -30,10 +34,20 @@ type HelpMapProps = {
  * @param player プレイヤー位置と向き
  * @param checkpoints 全チェックポイント座標
  * @param passedCheckpointKeys 通過済みチェックポイント座標キー集合
+ * @param visitedCellKeys 訪問済みセル座標キー集合
+ * @param revealHiddenMapForDebug 未訪問領域を表示するデバッグフラグ
  * @param goalActive ゴール有効化状態
  * @returns 壁線・S/G・プレイヤー向きを描いたSVG
  */
-export function HelpMap({ maze, player, checkpoints, passedCheckpointKeys, goalActive }: HelpMapProps) {
+export function HelpMap({
+  maze,
+  player,
+  checkpoints,
+  passedCheckpointKeys,
+  visitedCellKeys,
+  revealHiddenMapForDebug,
+  goalActive,
+}: HelpMapProps) {
   // 1マスの描画サイズ（px）。
   const cellSize = 22;
   // マップ外周の余白（px）。
@@ -64,6 +78,33 @@ export function HelpMap({ maze, player, checkpoints, passedCheckpointKeys, goalA
   const checkpointMap = new Map(
     checkpoints.map((checkpoint) => [toCheckpointKey(checkpoint.x, checkpoint.y), checkpoint])
   );
+
+  /**
+   * セルが訪問済み（またはデバッグ全表示）かを判定する。
+   * @param x セルX座標
+   * @param y セルY座標
+   * @returns 表示対象なら true
+   */
+  const isCellRevealed = (x: number, y: number): boolean =>
+    revealHiddenMapForDebug || visitedCellKeys.has(toCheckpointKey(x, y));
+
+  /**
+   * ヘルプマップ上で壁線を描くべきか判定する。
+   * @param x 対象セルX座標
+   * @param y 対象セルY座標
+   * @param dir 判定方向（N/E/S/W）
+   * @returns 壁線を描画すべきなら true
+   */
+  const shouldDrawWallLine = (
+    x: number,
+    y: number,
+    dir: keyof Maze[number][number]['walls']
+  ): boolean => {
+    const cell = maze[y][x];
+    // 通常モードでも仮想壁は置かず、実壁だけ描画する。
+    // なぜ必要か: 未訪問領域手前の分岐形状（壁なし開口）を正しく見せるため。
+    return cell.walls[dir];
+  };
 
   /**
    * セル属性に応じて床色を返す。
@@ -102,15 +143,17 @@ export function HelpMap({ maze, player, checkpoints, passedCheckpointKeys, goalA
       )}
       {maze.flatMap((row, y) =>
         row.flatMap((cell, x) => {
+          // 未訪問セルは非表示にし、通った道のみ表示する。
+          if (!isCellRevealed(x, y)) return [];
           const x0 = pad + x * cellSize;
           const y0 = pad + y * cellSize;
           const x1 = x0 + cellSize;
           const y1 = y0 + cellSize;
           return [
-            cell.walls.N ? <line key={`n-${x}-${y}`} x1={x0} y1={y0} x2={x1} y2={y0} stroke="#8cf4aa" strokeWidth={1.1} /> : null,
-            cell.walls.E ? <line key={`e-${x}-${y}`} x1={x1} y1={y0} x2={x1} y2={y1} stroke="#8cf4aa" strokeWidth={1.1} /> : null,
-            cell.walls.S ? <line key={`s-${x}-${y}`} x1={x0} y1={y1} x2={x1} y2={y1} stroke="#8cf4aa" strokeWidth={1.1} /> : null,
-            cell.walls.W ? <line key={`w-${x}-${y}`} x1={x0} y1={y0} x2={x0} y2={y1} stroke="#8cf4aa" strokeWidth={1.1} /> : null,
+            shouldDrawWallLine(x, y, 'N') ? <line key={`n-${x}-${y}`} x1={x0} y1={y0} x2={x1} y2={y0} stroke="#8cf4aa" strokeWidth={1.1} /> : null,
+            shouldDrawWallLine(x, y, 'E') ? <line key={`e-${x}-${y}`} x1={x1} y1={y0} x2={x1} y2={y1} stroke="#8cf4aa" strokeWidth={1.1} /> : null,
+            shouldDrawWallLine(x, y, 'S') ? <line key={`s-${x}-${y}`} x1={x0} y1={y1} x2={x1} y2={y1} stroke="#8cf4aa" strokeWidth={1.1} /> : null,
+            shouldDrawWallLine(x, y, 'W') ? <line key={`w-${x}-${y}`} x1={x0} y1={y0} x2={x0} y2={y1} stroke="#8cf4aa" strokeWidth={1.1} /> : null,
           ];
         })
       )}
