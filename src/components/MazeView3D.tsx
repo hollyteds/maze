@@ -114,14 +114,14 @@ export function MazeView3D({
       </defs>
       <rect x={0} y={0} width={VIEWPORT_WIDTH} height={VIEWPORT_HEIGHT} fill="url(#scanline)" />
       <g clipPath={`url(#${clipPathId})`}>
-        {[...projection.faces]
-          .sort((a, b) => b.depth - a.depth)
-          .map((face, index) => <polygon key={`face-${index}`} points={face.points} fill={face.fill} />)}
         {[...projection.floorPatches]
           .sort((a, b) => b.depth - a.depth)
           .map((patch, index) => (
             <polygon key={`floor-${index}`} points={patch.points} fill={patch.fill} />
           ))}
+        {[...projection.faces]
+          .sort((a, b) => b.depth - a.depth)
+          .map((face, index) => <polygon key={`face-${index}`} points={face.points} fill={face.fill} />)}
         {projection.lines.map((line, index) => (
           <line
             key={index}

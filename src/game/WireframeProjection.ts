@@ -11,6 +11,47 @@ type Frame = {
   bottom: number;
 };
 
+// 透視基準で使う2次元座標。
+type Point = {
+  x: number;
+  y: number;
+};
+
+// 天井点と床点のペア。
+type CeilingFloorPoint = {
+  ceiling: Point;
+  floor: Point;
+};
+
+// 奥行きごとに持つ左右レーン識別子。
+type DepthLane =
+  | 'outerLeft'
+  | 'left'
+  | 'center'
+  | 'right'
+  | 'outerRight'
+  | 'wallNearLeft'
+  | 'wallNearRight';
+
+// 1奥行きぶんの透視基準点テーブル。
+type DepthPerspective = Record<DepthLane, CeilingFloorPoint>;
+
+// 透視座標を参照するための奥行きキー。
+type PerspectiveDepthKey = 'd0' | 'd1' | 'd2' | 'd3';
+
+// 床ハイライトの対象レーン識別子。
+type FloorLane = 'left' | 'center' | 'right';
+
+// 共通アスペクト比でフレームを生成するための入力仕様。
+type FrameSpec = {
+  centerX: number;
+  centerY: number;
+  height: number;
+};
+
+// 奥行きキーの並び順。値を変えると描画距離の対応関係が変わる。
+const DEPTH_KEY_ORDER: PerspectiveDepthKey[] = ['d0', 'd1', 'd2', 'd3'];
+
 // ワイヤーフレーム線分の描画情報。
 export type WireLine = {
   x1: number;
@@ -82,19 +123,54 @@ export const VIEWPORT_HEIGHT = 380;
 export const LINE_COLOR = '#9df7b5';
 // 外枠グローの標準色。
 export const GLOW_COLOR = '#58d47f';
+// 中央床ハイライトの左右インセット率。大きくすると壁際の強調色が減る。
+const CENTER_FLOOR_PATCH_INSET_RATIO = 0.08;
+// 床ハイライトを壁側へわずかに食い込ませる量。隙間対策のため0より大きく維持する。
+const FLOOR_PATCH_EDGE_OVERDRAW = 0.8;
+// 床ハイライトを床面へわずかに下げる量。隙間対策のため0より大きく維持する。
+const FLOOR_PATCH_VERTICAL_OVERDRAW = 0.8;
+// 中央正面壁の共通縦横比（width / height）。変更すると全奥行きの見え方が連動して変わる。
+const CENTER_FRONT_WALL_ASPECT_RATIO = 444 / 328;
+// 最奥正面壁（d3）の縮小率。小さくすると最奥の圧縮感が強くなる。
+const FARTHEST_FRONT_WALL_SCALE = 0.8;
+// 最奥正面壁の左端座標。側面幅比率（1,1/2,1/3）計算の終点として使う。
+const FARTHEST_FRONT_WALL_LEFT =
+  260 -
+  ((138 * FARTHEST_FRONT_WALL_SCALE) * CENTER_FRONT_WALL_ASPECT_RATIO) / 2;
+// 側面幅の比率和。1 + 1/2 + 1/3 を使って基準幅を逆算する。
+const SIDE_WALL_RATIO_SUM = 1 + 1 / 2 + 1 / 3;
+// 手前側面の基準幅。これを 1,1/2,1/3 に分配して奥行き幅を決める。
+const SIDE_WALL_BASE_SPAN = (FARTHEST_FRONT_WALL_LEFT - 2) / SIDE_WALL_RATIO_SUM;
+// d1左端。これが depth0 側面の終端になり、以降の連続境界の起点になる。
+const D1_FRONT_WALL_LEFT = 2 + SIDE_WALL_BASE_SPAN;
+// d2左端。d1から基準幅の1/2だけ奥へ進める。
+const D2_FRONT_WALL_LEFT = D1_FRONT_WALL_LEFT + SIDE_WALL_BASE_SPAN / 2;
+// 各奥行きで使うフレーム中心と高さ。縦横比は上記定数で統一計算する。
+// d1/d2高さは「側面幅が手前から 1, 1/2, 1/3 で連続する」よう調整済み。
+const FRAME_SPEC_BY_DEPTH_KEY: Record<PerspectiveDepthKey, FrameSpec> = {
+  d0: { centerX: 260, centerY: 190, height: 328 },
+  d1: {
+    centerX: 260,
+    centerY: 193,
+    height: (VIEWPORT_WIDTH - D1_FRONT_WALL_LEFT * 2) / CENTER_FRONT_WALL_ASPECT_RATIO,
+  },
+  d2: {
+    centerX: 260,
+    centerY: 195.5,
+    height: (VIEWPORT_WIDTH - D2_FRONT_WALL_LEFT * 2) / CENTER_FRONT_WALL_ASPECT_RATIO,
+  },
+  d3: { centerX: 260, centerY: 197, height: 138 * FARTHEST_FRONT_WALL_SCALE },
+};
 
 class WireframeProjectionBuilder {
   // 最大可視深度（前方3マス）。
   private readonly viewDepth = 3;
   // 奥行きごとの壁塗り色。
   private readonly wallFillByDepth = ['#0b2117', '#091b13', '#07160f'];
-  // 疑似透視に使うフレーム定義（手前→奥）。
-  private readonly frames: Frame[] = [
-    { left: 38, right: 482, top: 26, bottom: 354 },
-    { left: 110, right: 410, top: 68, bottom: 318 },
-    { left: 166, right: 354, top: 102, bottom: 289 },
-    { left: 206, right: 314, top: 128, bottom: 266 },
-  ];
+  // 疑似透視に使う基準フレーム定義（キー: 奥行き段階）。
+  private readonly frameByDepthKey: Record<PerspectiveDepthKey, Frame>;
+  // 奥行きキー×左右レーンの天井/床基準点テーブル。
+  private readonly perspectiveByDepthKey: Record<PerspectiveDepthKey, DepthPerspective>;
   // 描画対象の線分バッファ。
   private readonly lines: WireLine[] = [];
   // 描画対象の面バッファ。
@@ -125,6 +201,7 @@ class WireframeProjectionBuilder {
     private readonly passedCheckpointKeys: Set<string>,
     private readonly goalActive: boolean
   ) {
+    this.frameByDepthKey = this.createFrameByDepthKey();
     this.checkpointKeySet = new Set(
       checkpoints.map((checkpoint) => toCheckpointKey(checkpoint.x, checkpoint.y))
     );
@@ -134,6 +211,7 @@ class WireframeProjectionBuilder {
         checkpoint.id,
       ])
     );
+    this.perspectiveByDepthKey = this.createPerspectiveByDepthKey();
   }
 
   /**
@@ -143,8 +221,8 @@ class WireframeProjectionBuilder {
   build(): WireframeProjection {
     // depthごとに「中央セル・左右セル」を評価して壁を組み立てる。
     for (let depth = 0; depth < this.viewDepth; depth++) {
-      const nearFrame = this.frames[depth];
-      const farFrame = this.frames[depth + 1];
+      const nearPerspective = this.perspectiveByDepthKey[this.getDepthKey(depth)];
+      const farPerspective = this.perspectiveByDepthKey[this.getDepthKey(depth + 1)];
       const cell = this.getRelativeCell(0, depth);
       const actions: string[] = [];
 
@@ -164,15 +242,15 @@ class WireframeProjectionBuilder {
           },
           actions: ['drawFrontWall(outOfBounds)'],
         });
-        this.drawFrontWall(farFrame, depth);
+        this.drawFrontWall(farPerspective, depth);
         break;
       }
 
-      const centerX = (farFrame.left + farFrame.right) / 2;
-      const centerY = farFrame.bottom - (farFrame.bottom - farFrame.top) * 0.38;
+      const centerX = farPerspective.center.ceiling.x;
+      const centerY =
+        farPerspective.center.floor.y -
+        (farPerspective.center.floor.y - farPerspective.center.ceiling.y) * 0.38;
       const centerSize = Math.max(8, 16 - depth * 2.2);
-      this.pushCenterFloorPatch(cell, nearFrame, farFrame, depth);
-      this.pushMarkerForCell(cell, centerX, centerY, centerSize);
 
       // 現在セルと左右隣接セルの壁情報から可視判定を作る。
       const leftClosed = cell.walls[LEFT_OF[this.player.dir]];
@@ -191,24 +269,33 @@ class WireframeProjectionBuilder {
       const shouldDrawLeftSideFront = leftCellExists && leftFrontClosed;
       const shouldDrawRightSideFront = rightCellExists && rightFrontClosed;
       const sideSize = Math.max(7, 14 - depth * 2.1);
+      this.pushFloorPatchForLane(cell, 'center', nearPerspective, farPerspective, depth);
+      // 左右通路が見えているときのみ、左右セルの床ハイライトを描画する。
+      if (leftVisible) {
+        this.pushFloorPatchForLane(leftCell, 'left', nearPerspective, farPerspective, depth);
+      }
+      if (rightVisible) {
+        this.pushFloorPatchForLane(rightCell, 'right', nearPerspective, farPerspective, depth);
+      }
+      this.pushMarkerForCell(cell, centerX, centerY, centerSize);
 
       // 正面が閉じている場合、このdepthで遮蔽されるため描画を確定して終了する。
       if (frontClosed) {
         if (shouldDrawLeftSideWall) {
-          this.drawSideWall('left', nearFrame, farFrame, depth, depth === 0);
+          this.drawSideWall('left', nearPerspective, farPerspective, depth);
           actions.push('drawSideWall(left)');
         }
         if (shouldDrawLeftSideFront) {
-          const markerPoint = this.drawSideFrontWall('left', farFrame, depth);
+          const markerPoint = this.drawSideFrontWall('left', farPerspective, depth);
           this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize);
           actions.push('drawSideFrontWall(left)');
         }
         if (shouldDrawRightSideWall) {
-          this.drawSideWall('right', nearFrame, farFrame, depth, depth === 0);
+          this.drawSideWall('right', nearPerspective, farPerspective, depth);
           actions.push('drawSideWall(right)');
         }
         if (shouldDrawRightSideFront) {
-          const markerPoint = this.drawSideFrontWall('right', farFrame, depth);
+          const markerPoint = this.drawSideFrontWall('right', farPerspective, depth);
           this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize);
           actions.push('drawSideFrontWall(right)');
         }
@@ -233,25 +320,25 @@ class WireframeProjectionBuilder {
           },
           actions: [...actions, 'drawFrontWall(frontClosed)'],
         });
-        this.drawFrontWall(farFrame, depth);
+        this.drawFrontWall(farPerspective, depth);
         break;
       }
 
       if (shouldDrawLeftSideWall) {
-        this.drawSideWall('left', nearFrame, farFrame, depth, depth === 0);
+        this.drawSideWall('left', nearPerspective, farPerspective, depth);
         actions.push('drawSideWall(left)');
       }
       if (shouldDrawLeftSideFront) {
-        const markerPoint = this.drawSideFrontWall('left', farFrame, depth);
+        const markerPoint = this.drawSideFrontWall('left', farPerspective, depth);
         this.pushMarkerForCell(leftCell, markerPoint.centerX, markerPoint.centerY, sideSize);
         actions.push('drawSideFrontWall(left)');
       }
       if (shouldDrawRightSideWall) {
-        this.drawSideWall('right', nearFrame, farFrame, depth, depth === 0);
+        this.drawSideWall('right', nearPerspective, farPerspective, depth);
         actions.push('drawSideWall(right)');
       }
       if (shouldDrawRightSideFront) {
-        const markerPoint = this.drawSideFrontWall('right', farFrame, depth);
+        const markerPoint = this.drawSideFrontWall('right', farPerspective, depth);
         this.pushMarkerForCell(rightCell, markerPoint.centerX, markerPoint.centerY, sideSize);
         actions.push('drawSideFrontWall(right)');
       }
@@ -276,7 +363,7 @@ class WireframeProjectionBuilder {
           shouldDrawRightSideFront,
         },
         actions,
-        });
+      });
     }
 
     // 描画コンポーネントに渡す投影結果を返す。
@@ -287,6 +374,179 @@ class WireframeProjectionBuilder {
       markers: this.markers,
       wallJudgements: this.wallJudgements,
     };
+  }
+
+  /**
+   * 数値depthを透視テーブル参照用キーへ変換する。
+   * @param depth 参照したい奥行きインデックス
+   * @returns 透視基準点テーブルの奥行きキー
+   */
+  private getDepthKey(depth: number): PerspectiveDepthKey {
+    // 表示可能範囲外のdepthは最奥キーへ寄せて参照を安定化する。
+    if (depth <= 0) return 'd0';
+    if (depth === 1) return 'd1';
+    if (depth === 2) return 'd2';
+    return 'd3';
+  }
+
+  /**
+   * 共通縦横比を維持した奥行きフレーム定義を生成する。
+   * @returns 奥行きキーで参照できるフレーム定義
+   */
+  private createFrameByDepthKey(): Record<PerspectiveDepthKey, Frame> {
+    const frames = {} as Record<PerspectiveDepthKey, Frame>;
+
+    DEPTH_KEY_ORDER.forEach((depthKey) => {
+      const spec = FRAME_SPEC_BY_DEPTH_KEY[depthKey];
+      const width = spec.height * CENTER_FRONT_WALL_ASPECT_RATIO;
+      frames[depthKey] = {
+        left: spec.centerX - width / 2,
+        right: spec.centerX + width / 2,
+        top: spec.centerY - spec.height / 2,
+        bottom: spec.centerY + spec.height / 2,
+      };
+    });
+
+    return frames;
+  }
+
+  /**
+   * 奥行き×左右レーンの天井/床基準点テーブルを構築する。
+   * @returns 奥行きキーで参照できる透視基準点表
+   */
+  private createPerspectiveByDepthKey(): Record<PerspectiveDepthKey, DepthPerspective> {
+    const perspectives = {} as Record<PerspectiveDepthKey, DepthPerspective>;
+    // 側面壁の基準幅。depth0の左側で「画面端(2)→d1左端」までを基準にする。
+    const sideWallBaseSpan = this.frameByDepthKey.d1.left - 2;
+
+    DEPTH_KEY_ORDER.forEach((depthKey, depthIndex) => {
+      const frame = this.frameByDepthKey[depthKey];
+      const centerX = (frame.left + frame.right) / 2;
+      const centerWidth = frame.right - frame.left;
+      const outerLeftX = frame.left - centerWidth;
+      const outerRightX = frame.right + centerWidth;
+      const nextDepthKey = DEPTH_KEY_ORDER[Math.min(depthIndex + 1, DEPTH_KEY_ORDER.length - 1)];
+      const nextFrame = this.frameByDepthKey[nextDepthKey];
+
+      // 側面壁の幅はdepthごとに 1, 1/2, 1/3 ... へ縮小する。
+      // なぜ必要か: 奥行きごとの縮尺を明示して、左右側壁のパースを一貫させるため。
+      const sideSpanDivisor = depthIndex + 1;
+      const sideWallSpan = sideWallBaseSpan / sideSpanDivisor;
+      const wallNearLeftX =
+        depthIndex < this.viewDepth ? nextFrame.left - sideWallSpan : frame.left;
+      const wallNearRightX =
+        depthIndex < this.viewDepth ? nextFrame.right + sideWallSpan : frame.right;
+      const wallNearLeftTop =
+        depthIndex < this.viewDepth
+          ? Math.max(
+              2,
+              this.interpolateYAtX(frame.left, frame.top, nextFrame.left, nextFrame.top, wallNearLeftX)
+            )
+          : frame.top;
+      const wallNearLeftBottom =
+        depthIndex < this.viewDepth
+          ? Math.min(
+              VIEWPORT_HEIGHT - 2,
+              this.interpolateYAtX(
+                frame.left,
+                frame.bottom,
+                nextFrame.left,
+                nextFrame.bottom,
+                wallNearLeftX
+              )
+            )
+          : frame.bottom;
+      const wallNearRightTop =
+        depthIndex < this.viewDepth
+          ? Math.max(
+              2,
+              this.interpolateYAtX(
+                frame.right,
+                frame.top,
+                nextFrame.right,
+                nextFrame.top,
+                wallNearRightX
+              )
+            )
+          : frame.top;
+      const wallNearRightBottom =
+        depthIndex < this.viewDepth
+          ? Math.min(
+              VIEWPORT_HEIGHT - 2,
+              this.interpolateYAtX(
+                frame.right,
+                frame.bottom,
+                nextFrame.right,
+                nextFrame.bottom,
+                wallNearRightX
+              )
+            )
+          : frame.bottom;
+
+      perspectives[depthKey] = {
+        outerLeft: this.toCeilingFloorPoint(outerLeftX, frame.top, frame.bottom),
+        left: this.toCeilingFloorPoint(frame.left, frame.top, frame.bottom),
+        center: this.toCeilingFloorPoint(centerX, frame.top, frame.bottom),
+        right: this.toCeilingFloorPoint(frame.right, frame.top, frame.bottom),
+        outerRight: this.toCeilingFloorPoint(outerRightX, frame.top, frame.bottom),
+        wallNearLeft: this.toCeilingFloorPoint(
+          wallNearLeftX,
+          wallNearLeftTop,
+          wallNearLeftBottom
+        ),
+        wallNearRight: this.toCeilingFloorPoint(
+          wallNearRightX,
+          wallNearRightTop,
+          wallNearRightBottom
+        ),
+      };
+    });
+
+    return perspectives;
+  }
+
+  /**
+   * 同一X上の天井点/床点ペアを生成する。
+   * @param x X座標
+   * @param top 天井Y座標
+   * @param bottom 床Y座標
+   * @returns 天井点と床点
+   */
+  private toCeilingFloorPoint(x: number, top: number, bottom: number): CeilingFloorPoint {
+    return {
+      ceiling: { x, y: top },
+      floor: { x, y: bottom },
+    };
+  }
+
+  /**
+   * 2点を結ぶ線上で指定Xに対応するYを返す。
+   * @param x1 線分始点X
+   * @param y1 線分始点Y
+   * @param x2 線分終点X
+   * @param y2 線分終点Y
+   * @param x 補間したいX
+   * @returns 線形補間したY
+   */
+  private interpolateYAtX(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    x: number
+  ): number {
+    if (x1 === x2) return y1;
+    const t = (x - x1) / (x2 - x1);
+    return y1 + (y2 - y1) * t;
+  }
+
+  /**
+   * 座標をSVGポリゴン用の文字列へ変換する。
+   * @param point 変換対象座標
+   * @returns `x,y`形式の文字列
+   */
+  private toSvgPoint(point: Point): string {
+    return `${point.x},${point.y}`;
   }
 
   /**
@@ -351,19 +611,28 @@ class WireframeProjectionBuilder {
 
   /**
    * 正面壁（矩形）を描画する。
-   * @param frame 描画対象フレーム
+   * @param perspective 描画対象奥行きの基準点
    * @param depth 奥行き深度
    */
-  private drawFrontWall(frame: Frame, depth: number) {
+  private drawFrontWall(perspective: DepthPerspective, depth: number) {
+    const left = perspective.left;
+    const right = perspective.right;
     this.pushFace(
-      `${frame.left},${frame.top} ${frame.right},${frame.top} ${frame.right},${frame.bottom} ${frame.left},${frame.bottom}`,
+      `${this.toSvgPoint(left.ceiling)} ${this.toSvgPoint(right.ceiling)} ${this.toSvgPoint(right.floor)} ${this.toSvgPoint(left.floor)}`,
       depth,
       'front-face'
     );
-    this.pushLine(frame.left, frame.top, frame.right, frame.top, 2.2, 'front-top');
-    this.pushLine(frame.left, frame.bottom, frame.right, frame.bottom, 2.2, 'front-bottom');
-    this.pushLine(frame.left, frame.top, frame.left, frame.bottom, 2.2, 'front-left');
-    this.pushLine(frame.right, frame.top, frame.right, frame.bottom, 2.2, 'front-right');
+    this.pushLine(left.ceiling.x, left.ceiling.y, right.ceiling.x, right.ceiling.y, 2.2, 'front-top');
+    this.pushLine(left.floor.x, left.floor.y, right.floor.x, right.floor.y, 2.2, 'front-bottom');
+    this.pushLine(left.ceiling.x, left.ceiling.y, left.floor.x, left.floor.y, 2.2, 'front-left');
+    this.pushLine(
+      right.ceiling.x,
+      right.ceiling.y,
+      right.floor.x,
+      right.floor.y,
+      2.2,
+      'front-right'
+    );
   }
 
   /**
@@ -387,95 +656,172 @@ class WireframeProjectionBuilder {
   }
 
   /**
-   * 中央通路の床へ対象セル色のハイライトを描画する。
+   * 指定レーンの床へ対象セル色のハイライトを描画する。
    * @param cell 対象セル
-   * @param nearFrame 手前フレーム
-   * @param farFrame 奥フレーム
+   * @param lane 描画対象レーン（left/center/right）
+   * @param nearPerspective 手前奥行きの基準点
+   * @param farPerspective 奥奥行きの基準点
    * @param depth 奥行き深度
    */
-  private pushCenterFloorPatch(cell: Cell | null, nearFrame: Frame, farFrame: Frame, depth: number) {
+  private pushFloorPatchForLane(
+    cell: Cell | null,
+    lane: FloorLane,
+    nearPerspective: DepthPerspective,
+    farPerspective: DepthPerspective,
+    depth: number
+  ) {
     const floorColor = this.getCellFloorColor(cell);
     if (!floorColor) return;
-    const nearInset = (nearFrame.right - nearFrame.left) * 0.16;
-    const farInset = (farFrame.right - farFrame.left) * 0.16;
-    const nearY = nearFrame.bottom - 3;
-    const farY = farFrame.bottom - 3;
+    const nearBounds = this.getLaneFloorBounds(nearPerspective, lane);
+    const farBounds = this.getLaneFloorBounds(farPerspective, lane);
+    const nearWidth = nearBounds.right.x - nearBounds.left.x;
+    const farWidth = farBounds.right.x - farBounds.left.x;
+    // 中央のみ少し内側へ寄せ、左右は壁際まで塗って隙間を防ぐ。
+    const nearInset = lane === 'center' ? nearWidth * CENTER_FLOOR_PATCH_INSET_RATIO : 0;
+    const farInset = lane === 'center' ? farWidth * CENTER_FLOOR_PATCH_INSET_RATIO : 0;
+    const nearLeftX = nearBounds.left.x + nearInset - FLOOR_PATCH_EDGE_OVERDRAW;
+    const nearRightX = nearBounds.right.x - nearInset + FLOOR_PATCH_EDGE_OVERDRAW;
+    const farLeftX = farBounds.left.x + farInset - FLOOR_PATCH_EDGE_OVERDRAW;
+    const farRightX = farBounds.right.x - farInset + FLOOR_PATCH_EDGE_OVERDRAW;
+    // 床の境界と重ねて描くことで、SVGアンチエイリアス由来のヘアライン隙間を抑える。
+    const nearY = (nearBounds.left.y + nearBounds.right.y) / 2 + FLOOR_PATCH_VERTICAL_OVERDRAW;
+    const farY = (farBounds.left.y + farBounds.right.y) / 2 + FLOOR_PATCH_VERTICAL_OVERDRAW;
     this.pushFloorPatch(
-      `${nearFrame.left + nearInset},${nearY} ${nearFrame.right - nearInset},${nearY} ${farFrame.right - farInset},${farY} ${farFrame.left + farInset},${farY}`,
+      `${nearLeftX},${nearY} ${nearRightX},${nearY} ${farRightX},${farY} ${farLeftX},${farY}`,
       floorColor,
       depth,
-      'center-floor-highlight'
+      `${lane}-floor-highlight`
     );
+  }
+
+  /**
+   * レーン別の床左右境界点を返す。
+   * @param perspective 参照元奥行きの基準点
+   * @param lane 取得対象レーン（left/center/right）
+   * @returns 床面の左右境界点
+   */
+  private getLaneFloorBounds(
+    perspective: DepthPerspective,
+    lane: FloorLane
+  ): { left: Point; right: Point } {
+    if (lane === 'left') {
+      return { left: perspective.outerLeft.floor, right: perspective.left.floor };
+    }
+    if (lane === 'right') {
+      return { left: perspective.right.floor, right: perspective.outerRight.floor };
+    }
+    return { left: perspective.left.floor, right: perspective.right.floor };
   }
 
   /**
    * 側面壁（台形）を描画する。
    * @param side 描画対象側（left/right）
-   * @param nearFrame 手前フレーム
-   * @param farFrame 奥フレーム
+   * @param nearPerspective 手前奥行きの基準点
+   * @param farPerspective 奥奥行きの基準点
    * @param depth 奥行き深度
-   * @param flushToCanvas 最手前辺を画面端に吸着するか
    */
   private drawSideWall(
     side: 'left' | 'right',
-    nearFrame: Frame,
-    farFrame: Frame,
-    depth: number,
-    flushToCanvas = false
+    nearPerspective: DepthPerspective,
+    farPerspective: DepthPerspective,
+    depth: number
   ) {
     const partPrefix = `${side}-side-wall`;
-    const baseNearX = side === 'left' ? nearFrame.left : nearFrame.right;
-    const nearX = flushToCanvas ? (side === 'left' ? 2 : VIEWPORT_WIDTH - 2) : baseNearX;
-    const farX = side === 'left' ? farFrame.left : farFrame.right;
-
-    let nearTop = nearFrame.top;
-    let nearBottom = nearFrame.bottom;
-    if (flushToCanvas && farX !== baseNearX) {
-      const t = (nearX - baseNearX) / (farX - baseNearX);
-      nearTop = nearFrame.top + (farFrame.top - nearFrame.top) * t;
-      nearBottom = nearFrame.bottom + (farFrame.bottom - nearFrame.bottom) * t;
-      nearTop = Math.max(2, nearTop);
-      nearBottom = Math.min(VIEWPORT_HEIGHT - 2, nearBottom);
-    }
+    const near = side === 'left' ? nearPerspective.wallNearLeft : nearPerspective.wallNearRight;
+    const far = side === 'left' ? farPerspective.left : farPerspective.right;
 
     this.pushFace(
-      `${nearX},${nearTop} ${farX},${farFrame.top} ${farX},${farFrame.bottom} ${nearX},${nearBottom}`,
+      `${this.toSvgPoint(near.ceiling)} ${this.toSvgPoint(far.ceiling)} ${this.toSvgPoint(far.floor)} ${this.toSvgPoint(near.floor)}`,
       depth,
       `${partPrefix}-face`
     );
-    this.pushLine(nearX, nearTop, nearX, nearBottom, 2.2, `${partPrefix}-near`);
-    this.pushLine(farX, farFrame.top, farX, farFrame.bottom, 1.8, `${partPrefix}-far`);
-    this.pushLine(nearX, nearTop, farX, farFrame.top, 1.8, `${partPrefix}-top`);
-    this.pushLine(nearX, nearBottom, farX, farFrame.bottom, 1.8, `${partPrefix}-bottom`);
+    this.pushLine(
+      near.ceiling.x,
+      near.ceiling.y,
+      near.floor.x,
+      near.floor.y,
+      2.2,
+      `${partPrefix}-near`
+    );
+    this.pushLine(
+      far.ceiling.x,
+      far.ceiling.y,
+      far.floor.x,
+      far.floor.y,
+      1.8,
+      `${partPrefix}-far`
+    );
+    this.pushLine(
+      near.ceiling.x,
+      near.ceiling.y,
+      far.ceiling.x,
+      far.ceiling.y,
+      1.8,
+      `${partPrefix}-top`
+    );
+    this.pushLine(
+      near.floor.x,
+      near.floor.y,
+      far.floor.x,
+      far.floor.y,
+      1.8,
+      `${partPrefix}-bottom`
+    );
   }
 
   /**
    * 側面先に見える正面壁（独立矩形）を描画する。
    * @param side 描画対象側（left/right）
-   * @param farFrame 奥フレーム
+   * @param farPerspective 奥奥行きの基準点
    * @param depth 奥行き深度
    * @returns マーカー配置に使う矩形中心座標
    */
-  private drawSideFrontWall(side: 'left' | 'right', farFrame: Frame, depth: number) {
+  private drawSideFrontWall(side: 'left' | 'right', farPerspective: DepthPerspective, depth: number) {
     const partPrefix = `${side}-side-front-wall`;
-    const innerX = side === 'left' ? farFrame.left : farFrame.right;
-    // 左右マスの正面壁幅は同奥行きの中央正面壁幅と一致させる。
-    const centerFrontWidth = farFrame.right - farFrame.left;
-    const outerX = side === 'left' ? innerX - centerFrontWidth : innerX + centerFrontWidth;
+    const inner = side === 'left' ? farPerspective.left : farPerspective.right;
+    const outer = side === 'left' ? farPerspective.outerLeft : farPerspective.outerRight;
 
     this.pushFace(
-      `${innerX},${farFrame.top} ${outerX},${farFrame.top} ${outerX},${farFrame.bottom} ${innerX},${farFrame.bottom}`,
+      `${this.toSvgPoint(inner.ceiling)} ${this.toSvgPoint(outer.ceiling)} ${this.toSvgPoint(outer.floor)} ${this.toSvgPoint(inner.floor)}`,
       depth,
       `${partPrefix}-face`
     );
-    this.pushLine(innerX, farFrame.top, innerX, farFrame.bottom, 1.8, `${partPrefix}-inner`);
-    this.pushLine(outerX, farFrame.top, outerX, farFrame.bottom, 1.8, `${partPrefix}-outer`);
-    this.pushLine(innerX, farFrame.top, outerX, farFrame.top, 1.8, `${partPrefix}-top`);
-    this.pushLine(innerX, farFrame.bottom, outerX, farFrame.bottom, 1.8, `${partPrefix}-bottom`);
+    this.pushLine(
+      inner.ceiling.x,
+      inner.ceiling.y,
+      inner.floor.x,
+      inner.floor.y,
+      1.8,
+      `${partPrefix}-inner`
+    );
+    this.pushLine(
+      outer.ceiling.x,
+      outer.ceiling.y,
+      outer.floor.x,
+      outer.floor.y,
+      1.8,
+      `${partPrefix}-outer`
+    );
+    this.pushLine(
+      inner.ceiling.x,
+      inner.ceiling.y,
+      outer.ceiling.x,
+      outer.ceiling.y,
+      1.8,
+      `${partPrefix}-top`
+    );
+    this.pushLine(
+      inner.floor.x,
+      inner.floor.y,
+      outer.floor.x,
+      outer.floor.y,
+      1.8,
+      `${partPrefix}-bottom`
+    );
 
     return {
-      centerX: (innerX + outerX) / 2,
-      centerY: (farFrame.top + farFrame.bottom) / 2,
+      centerX: (inner.ceiling.x + outer.ceiling.x) / 2,
+      centerY: (inner.ceiling.y + inner.floor.y) / 2,
     };
   }
 
