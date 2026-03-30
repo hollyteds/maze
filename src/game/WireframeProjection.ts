@@ -268,6 +268,13 @@ class WireframeProjectionBuilder {
       const shouldDrawRightSideWall = rightClosed;
       const shouldDrawLeftSideFront = leftCellExists && leftFrontClosed;
       const shouldDrawRightSideFront = rightCellExists && rightFrontClosed;
+      // ユーザー要求: 奥行き2で側面壁があるケースでは、片側正面が開口なら奥行き3側も探索する。
+      // 影響: frontClosed分岐での側方先壁の描画条件にだけ追加し、通常の遠景処理は維持する。
+      const hasDepth2SideWall = depth === 1 && (shouldDrawLeftSideWall || shouldDrawRightSideWall);
+      const shouldSearchDeeperLeftSideFront =
+        !leftFrontClosed && (leftVisible || hasDepth2SideWall);
+      const shouldSearchDeeperRightSideFront =
+        !rightFrontClosed && (rightVisible || hasDepth2SideWall);
       const sideSize = Math.max(7, 14 - depth * 2.1);
       this.pushFloorPatchForLane(cell, 'center', nearPerspective, farPerspective, depth);
       // 左右通路が見えているときのみ、左右セルの床ハイライトを描画する。
@@ -300,10 +307,11 @@ class WireframeProjectionBuilder {
           actions.push('drawSideFrontWall(right)');
         }
         // 正面が壁でも左右通路が開いている場合は、その奥の正面壁を探索して描画する。
-        if (leftVisible && !leftFrontClosed) {
+        // なぜ必要か: 奥行き2で側面壁がある構図では、片側開口先の奥行き3壁を補完表示するため。
+        if (shouldSearchDeeperLeftSideFront) {
           this.drawDeeperSideFrontWall('left', depth + 1, actions);
         }
-        if (rightVisible && !rightFrontClosed) {
+        if (shouldSearchDeeperRightSideFront) {
           this.drawDeeperSideFrontWall('right', depth + 1, actions);
         }
         this.wallJudgements.push({
@@ -324,6 +332,9 @@ class WireframeProjectionBuilder {
             shouldDrawRightSideWall,
             shouldDrawLeftSideFront,
             shouldDrawRightSideFront,
+            hasDepth2SideWall,
+            shouldSearchDeeperLeftSideFront,
+            shouldSearchDeeperRightSideFront,
           },
           actions: [...actions, 'drawFrontWall(frontClosed)'],
         });
