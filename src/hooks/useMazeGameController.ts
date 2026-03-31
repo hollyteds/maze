@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CAMERA_MOVE_DURATION_MS,
   GOAL,
+  MAP_DEBUG_REVEAL_KEY,
   MAZE_HEIGHT,
   MAZE_WIDTH,
   START,
+  TIMER_INTERVAL_MS,
 } from '../game/constants';
 import { Checkpoint, generateCheckpoints, toCheckpointKey } from '../game/checkpointUtils';
 import { moveForward, rotate } from '../game/playerActions';
@@ -26,10 +28,65 @@ type MazeGameController = {
   handleRetry: () => void;
 };
 
-// タイマーの更新間隔（ミリ秒）。細かすぎる再描画を避けつつ体感を維持する。
-const TIMER_INTERVAL_MS = 50;
-// ヘルプマップの隠し領域をデバッグ表示へ切り替えるキー。
-const MAP_DEBUG_REVEAL_KEY = 'd';
+// ヘルプマップのデバッグ表示切替キー（大文字）。
+const MAP_DEBUG_REVEAL_KEY_UPPER = MAP_DEBUG_REVEAL_KEY.toUpperCase();
+
+/**
+ * 移動/回転に使う矢印キーかどうかを判定する。
+ * @param key キー入力文字列
+ * @returns 移動入力に使う矢印キーならtrue
+ */
+const isMoveControlKey = (key: string): boolean =>
+  key === 'ArrowUp' || key === 'ArrowLeft' || key === 'ArrowRight';
+
+/**
+ * キー入力から次のプレイヤー状態を計算する。
+ * @param key 押下キー
+ * @param player 現在のプレイヤー状態
+ * @param maze 迷路データ
+ * @returns 移動/回転後の状態（対象外キーなら現状を返す）
+ */
+const resolveNextPlayerState = (
+  key: string,
+  player: PlayerState,
+  maze: Maze
+): PlayerState => {
+  if (key === 'ArrowUp') return moveForward(player, maze);
+  if (key === 'ArrowLeft') return { ...player, dir: rotate(player.dir, 'left') };
+  if (key === 'ArrowRight') return { ...player, dir: rotate(player.dir, 'right') };
+  return player;
+};
+
+/**
+ * 訪問済みセル集合へセルキーを追加する。
+ * @param previous 既存の訪問済みセル集合
+ * @param cellKey 追加対象のセルキー
+ * @returns 更新後集合（既存なら同一参照を返す）
+ */
+const appendVisitedCellKey = (previous: Set<string>, cellKey: string): Set<string> => {
+  if (previous.has(cellKey)) return previous;
+  const updated = new Set(previous);
+  updated.add(cellKey);
+  return updated;
+};
+
+/**
+ * 通過済みチェックポイント集合へセルキーを追加する。
+ * @param previous 既存の通過済みチェックポイント集合
+ * @param cellKey 判定対象のセルキー
+ * @param checkpointKeySet 全チェックポイントのキー集合
+ * @returns 更新後集合（対象外/既存なら同一参照を返す）
+ */
+const appendPassedCheckpointKey = (
+  previous: Set<string>,
+  cellKey: string,
+  checkpointKeySet: Set<string>
+): Set<string> => {
+  if (!checkpointKeySet.has(cellKey) || previous.has(cellKey)) return previous;
+  const updated = new Set(previous);
+  updated.add(cellKey);
+  return updated;
+};
 
 /**
  * 初期ゲーム状態（迷路とチェックポイント）を生成する。
@@ -116,7 +173,7 @@ export const useMazeGameController = (): MazeGameController => {
         return;
       }
       // ヘルプマップ表示中のみデバッグ開示トグルを受け付ける。
-      if (showHelpMap && (e.key === MAP_DEBUG_REVEAL_KEY || e.key === MAP_DEBUG_REVEAL_KEY.toUpperCase())) {
+      if (showHelpMap && (e.key === MAP_DEBUG_REVEAL_KEY || e.key === MAP_DEBUG_REVEAL_KEY_UPPER)) {
         e.preventDefault();
         if (!e.repeat) setRevealHiddenMapForDebug((visible) => !visible);
         return;
@@ -124,45 +181,30 @@ export const useMazeGameController = (): MazeGameController => {
       // ヘルプ表示中は移動操作を無効化する。
       if (showHelpMap) return;
 
-      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (isMoveControlKey(e.key)) {
         e.preventDefault();
       }
       // カメラ移動中は矢印操作を無効化し、視覚移動完了まで入力を待たせる。
-      if (
-        (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') &&
-        Date.now() < inputLockUntilRef.current
-      ) {
+      if (isMoveControlKey(e.key) && Date.now() < inputLockUntilRef.current) {
         return;
       }
       // クリア後は状態変化を止める。
       if (finished) return;
 
-      let next = player;
-      if (e.key === 'ArrowUp') next = moveForward(player, maze);
-      if (e.key === 'ArrowLeft') next = { ...player, dir: rotate(player.dir, 'left') };
-      if (e.key === 'ArrowRight') next = { ...player, dir: rotate(player.dir, 'right') };
+      const next = resolveNextPlayerState(e.key, player, maze);
 
       if (next !== player) {
         // カメラ演出時間と同じdurationだけ次の矢印入力をロックする。
         inputLockUntilRef.current = Date.now() + CAMERA_MOVE_DURATION_MS;
         setPlayer(next);
         // 移動先セルを訪問済みへ追加し、ヘルプマップ開示対象として保持する。
+        const nextCellKey = toCheckpointKey(next.x, next.y);
         setVisitedCellKeys((prev) => {
-          const key = toCheckpointKey(next.x, next.y);
-          if (prev.has(key)) return prev;
-          const updated = new Set(prev);
-          updated.add(key);
-          return updated;
+          return appendVisitedCellKey(prev, nextCellKey);
         });
         // 新しい位置がチェックポイントなら通過済み集合へ追加する。
-        const checkpointKey = toCheckpointKey(next.x, next.y);
         setPassedCheckpointKeys((prev) => {
-          if (!checkpointKeySet.has(checkpointKey) || prev.has(checkpointKey)) {
-            return prev;
-          }
-          const updated = new Set(prev);
-          updated.add(checkpointKey);
-          return updated;
+          return appendPassedCheckpointKey(prev, nextCellKey, checkpointKeySet);
         });
         if (!startTime) setStartTime(Date.now());
       }

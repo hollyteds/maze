@@ -2,9 +2,8 @@ import React from 'react';
 import { CompassOverlay } from './components/CompassOverlay';
 import { HelpMap } from './components/HelpMap';
 import { MazeView3D } from './components/MazeView3D';
-import { GOAL_ACTIVE_COLOR, GOAL_INACTIVE_COLOR } from './game/constants';
+import { GOAL_ACTIVE_COLOR, GOAL_INACTIVE_COLOR, VIEWPORT_WIDTH } from './game/constants';
 import { toCheckpointKey } from './game/checkpointUtils';
-import { VIEWPORT_WIDTH } from './game/WireframeProjection';
 import { useMazeGameController } from './hooks/useMazeGameController';
 
 /**
