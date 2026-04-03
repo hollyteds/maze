@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { TouchEvent, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Checkpoint, toCheckpointKey } from '../game/checkpointUtils';
 import {
@@ -13,6 +13,9 @@ import {
   ENABLE_WALL_DEBUG_LOG,
   GLOW_COLOR,
   GOAL_LOCKED_WARNING_DURATION_MS,
+  TOUCH_SWIPE_TURN_THRESHOLD_PX,
+  TOUCH_TAP_MAX_DURATION_MS,
+  TOUCH_TAP_MOVE_TOLERANCE_PX,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
 } from '../game/constants';
@@ -21,6 +24,10 @@ import { GoalMessageOverlay } from './maze3d/GoalMessageOverlay';
 import { CameraPose, easeInOutCubic, getShortestAngleDelta, toCameraPose } from './maze3d/cameraPose';
 import { buildMazeWorld } from './maze3d/mazeWorldBuilder';
 import { clearGroup } from './maze3d/sceneObjectDisposer';
+import {
+  TouchGestureInterpreter,
+  TOUCH_GESTURE_ACTIONS,
+} from './maze3d/touchGestureInterpreter';
 
 // MazeView3Dコンポーネントの入力プロパティ。
 type MazeView3DProps = {
@@ -40,6 +47,14 @@ type MazeView3DProps = {
   goalActive: boolean;
   // クリア済み状態。true のときは GOAL 表示に切り替える。
   finished: boolean;
+  // タッチ用全画面表示モード。true の場合は表示領域いっぱいに描画する。
+  fullScreen?: boolean;
+  // タップ前進入力ハンドラ。
+  onForward: () => void;
+  // 左回転入力ハンドラ。
+  onTurnLeft: () => void;
+  // 右回転入力ハンドラ。
+  onTurnRight: () => void;
 };
 
 /**
@@ -52,6 +67,10 @@ type MazeView3DProps = {
  * @param passedCheckpointKeys 通過済みチェックポイント座標キー集合
  * @param goalActive ゴール有効化状態
  * @param finished クリア済み状態
+ * @param fullScreen タッチ用全画面表示モード
+ * @param onForward タップ前進入力ハンドラ
+ * @param onTurnLeft 左回転入力ハンドラ
+ * @param onTurnRight 右回転入力ハンドラ
  * @returns Three.js 3Dビューと通知UI
  */
 export function MazeView3D({
@@ -63,7 +82,13 @@ export function MazeView3D({
   passedCheckpointKeys,
   goalActive,
   finished,
+  fullScreen = false,
+  onForward,
+  onTurnLeft,
+  onTurnRight,
 }: MazeView3DProps) {
+  // 3Dビュー全体の表示領域参照。実サイズ追従リサイズに使う。
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   // WebGL描画先のcanvas要素参照。
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Three.jsレンダラー参照。
@@ -91,6 +116,14 @@ export function MazeView3D({
   const previousCameraPlayerRef = useRef({ x: player.x, y: player.y, dir: player.dir });
   // 同一内容のデバッグログ連続出力を抑制するための前回スナップショット。
   const lastDebugSnapshotRef = useRef('');
+  // タッチジェスチャーをゲーム入力へ解釈するクラスインスタンス。
+  const touchGestureInterpreterRef = useRef(
+    new TouchGestureInterpreter({
+      swipeTurnThresholdPx: TOUCH_SWIPE_TURN_THRESHOLD_PX,
+      tapMoveTolerancePx: TOUCH_TAP_MOVE_TOLERANCE_PX,
+      tapMaxDurationMs: TOUCH_TAP_MAX_DURATION_MS,
+    })
+  );
 
   /**
    * 現在シーンを1フレーム描画する。
@@ -202,7 +235,6 @@ export function MazeView3D({
       alpha: false,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, true);
     renderer.setClearColor('#020503', 1);
 
     const scene = new THREE.Scene();
@@ -223,6 +255,15 @@ export function MazeView3D({
     cameraRef.current = camera;
     worldGroupRef.current = worldGroup;
 
+    const viewportElement = viewportRef.current;
+    if (viewportElement) {
+      const width = Math.max(1, Math.floor(viewportElement.clientWidth));
+      const height = Math.max(1, Math.floor(viewportElement.clientHeight));
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    }
+
     const initialPose = toCameraPose(player);
     applyCameraPose(initialPose);
     renderScene();
@@ -238,6 +279,38 @@ export function MazeView3D({
       sceneRef.current = null;
       cameraRef.current = null;
       worldGroupRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const viewportElement = viewportRef.current;
+    if (!viewportElement) return;
+
+    /**
+     * 表示領域の実サイズに合わせてレンダラーと投影行列を更新する。
+     */
+    const resizeViewport = () => {
+      const renderer = rendererRef.current;
+      const camera = cameraRef.current;
+      if (!renderer || !camera) return;
+      const width = Math.max(1, Math.floor(viewportElement.clientWidth));
+      const height = Math.max(1, Math.floor(viewportElement.clientHeight));
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderScene();
+    };
+
+    resizeViewport();
+    const observer = new ResizeObserver(() => {
+      resizeViewport();
+    });
+    observer.observe(viewportElement);
+    window.addEventListener('resize', resizeViewport);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', resizeViewport);
     };
   }, []);
 
@@ -302,14 +375,60 @@ export function MazeView3D({
     console.log('[MazeView3D] three-world-debug', debugPayload);
   }, [checkpoints, goalExit, passedCheckpointKeys, player]);
 
+  /**
+   * タッチ開始位置を記録する。
+   * @param event キャンバスのタッチ開始イベント
+   */
+  const handleTouchStart = (event: TouchEvent<HTMLCanvasElement>) => {
+    const touchGestureInterpreter = touchGestureInterpreterRef.current;
+    if (event.touches.length !== 1) {
+      touchGestureInterpreter.cancel();
+      return;
+    }
+    const touch = event.touches[0];
+    touchGestureInterpreter.begin({ x: touch.clientX, y: touch.clientY, at: Date.now() });
+  };
+
+  /**
+   * タッチ終了時にスワイプ/タップ判定を行い、入力へ変換する。
+   * @param event キャンバスのタッチ終了イベント
+   */
+  const handleTouchEnd = (event: TouchEvent<HTMLCanvasElement>) => {
+    if (event.changedTouches.length === 0) return;
+
+    const touchGestureInterpreter = touchGestureInterpreterRef.current;
+    const touch = event.changedTouches[0];
+    const action = touchGestureInterpreter.resolve({
+      x: touch.clientX,
+      y: touch.clientY,
+      at: Date.now(),
+    });
+    if (action !== TOUCH_GESTURE_ACTIONS.NONE) {
+      event.preventDefault();
+    }
+    if (action === TOUCH_GESTURE_ACTIONS.FORWARD) onForward();
+    if (action === TOUCH_GESTURE_ACTIONS.TURN_LEFT) onTurnLeft();
+    if (action === TOUCH_GESTURE_ACTIONS.TURN_RIGHT) onTurnRight();
+  };
+
+  /**
+   * タッチキャンセル時にジェスチャー開始情報を破棄する。
+   */
+  const handleTouchCancel = () => {
+    touchGestureInterpreterRef.current.cancel();
+  };
+
   return (
     <div
+      ref={viewportRef}
       style={{
         position: 'relative',
-        width: VIEWPORT_WIDTH,
-        height: VIEWPORT_HEIGHT,
+        width: '100%',
+        height: fullScreen ? '100%' : undefined,
+        maxWidth: fullScreen ? 'none' : `${VIEWPORT_WIDTH}px`,
+        aspectRatio: fullScreen ? undefined : `${VIEWPORT_WIDTH} / ${VIEWPORT_HEIGHT}`,
         background: '#020503',
-        borderRadius: 4,
+        borderRadius: fullScreen ? 0 : 4,
         overflow: 'hidden',
       }}
     >
@@ -320,10 +439,14 @@ export function MazeView3D({
         style={{
           position: 'absolute',
           inset: 0,
-          width: `${VIEWPORT_WIDTH}px`,
-          height: `${VIEWPORT_HEIGHT}px`,
+          width: '100%',
+          height: '100%',
           display: 'block',
+          touchAction: 'none',
         }}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
       />
       <GoalMessageOverlay
         showGoalPrompt={showGoalPrompt}

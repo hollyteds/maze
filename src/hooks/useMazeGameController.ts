@@ -6,7 +6,11 @@ import {
 } from '../game/constants';
 import { Checkpoint, toCheckpointKey } from '../game/checkpointUtils';
 import { createGameField, createInitialVisitedCellKeys } from '../game/mazeFieldFactory';
-import { isMoveControlKey, resolveNextPlayerState } from '../game/playerInputResolver';
+import {
+  isMoveControlKey,
+  MoveControlKey,
+  resolveNextPlayerState,
+} from '../game/playerInputResolver';
 import { appendPassedCheckpointKey, appendVisitedCellKey } from '../game/visitedSetUtils';
 import {
   GoalExit,
@@ -30,7 +34,17 @@ type MazeGameController = {
   passedCheckpointCount: number;
   goalActive: boolean;
   lockedGoalAttemptCount: number;
+  handleForward: () => void;
+  handleTurnLeft: () => void;
+  handleTurnRight: () => void;
+  handleToggleHelpMap: () => void;
   handleRetry: () => void;
+};
+
+// ゲーム制御フックの設定値。
+type MazeGameControllerOptions = {
+  // ヘルプマップ中のデバッグ開示キー受付可否。falseでDキー無効化。
+  enableMapDebugToggle?: boolean;
 };
 
 // ヘルプマップのデバッグ表示切替キー（大文字）。
@@ -38,9 +52,11 @@ const MAP_DEBUG_REVEAL_KEY_UPPER = MAP_DEBUG_REVEAL_KEY.toUpperCase();
 
 /**
  * ゲーム状態（移動・タイマー・クリア判定）を一元管理するカスタムフック。
+ * @param options キー操作設定（デバッグ開示キー受付可否など）
  * @returns 画面描画に必要な状態と操作ハンドラ
  */
-export const useMazeGameController = (): MazeGameController => {
+export const useMazeGameController = (options?: MazeGameControllerOptions): MazeGameController => {
+  const enableMapDebugToggle = options?.enableMapDebugToggle ?? true;
   // 迷路とチェックポイントを同一タイミングで初期生成する（初回のみ）。
   const initialField = useMemo(() => createGameField(), []);
   // 現在の迷路データ。
@@ -91,37 +107,18 @@ export const useMazeGameController = (): MazeGameController => {
     return () => clearInterval(timer);
   }, [startTime, finished]);
 
-  const handleKeyDown = useCallback(
+  const handleMoveControl = useCallback(
     /**
-     * キーボード入力を処理する。
-     * @param e キー押下イベント
+     * 共通の移動/回転入力を処理する。
+     * @param key 実行する移動操作キー
      */
-    (e: KeyboardEvent) => {
-      if (e.key === 'h' || e.key === 'H') {
-        e.preventDefault();
-        if (!e.repeat) setShowHelpMap((visible) => !visible);
-        return;
-      }
-      // ヘルプマップ表示中のみデバッグ開示トグルを受け付ける。
-      if (showHelpMap && (e.key === MAP_DEBUG_REVEAL_KEY || e.key === MAP_DEBUG_REVEAL_KEY_UPPER)) {
-        e.preventDefault();
-        if (!e.repeat) setRevealHiddenMapForDebug((visible) => !visible);
-        return;
-      }
-      // ヘルプ表示中は移動操作を無効化する。
-      if (showHelpMap) return;
+    (key: MoveControlKey) => {
+      // ヘルプ表示中・クリア後は移動操作を止める。
+      if (showHelpMap || finished) return;
+      // カメラ移動中は次入力を受け付けない。
+      if (Date.now() < inputLockUntilRef.current) return;
 
-      if (isMoveControlKey(e.key)) {
-        e.preventDefault();
-      }
-      // カメラ移動中は矢印操作を無効化し、視覚移動完了まで入力を待たせる。
-      if (isMoveControlKey(e.key) && Date.now() < inputLockUntilRef.current) {
-        return;
-      }
-      // クリア後は状態変化を止める。
-      if (finished) return;
-
-      const result = resolveNextPlayerState(e.key, player, maze, goalExit, goalActive);
+      const result = resolveNextPlayerState(key, player, maze, goalExit, goalActive);
       const next = result.nextPlayer;
 
       if (result.attemptedLockedGoal) {
@@ -138,32 +135,78 @@ export const useMazeGameController = (): MazeGameController => {
         setPlayer(next);
         // 移動先セルを訪問済みへ追加し、ヘルプマップ開示対象として保持する。
         const nextCellKey = toCheckpointKey(next.x, next.y);
-        setVisitedCellKeys((prev) => {
-          return appendVisitedCellKey(prev, nextCellKey);
-        });
+        setVisitedCellKeys((prev) => appendVisitedCellKey(prev, nextCellKey));
         // 新しい位置がチェックポイントなら通過済み集合へ追加する。
-        setPassedCheckpointKeys((prev) => {
-          return appendPassedCheckpointKey(prev, nextCellKey, checkpointKeySet);
-        });
+        setPassedCheckpointKeys((prev) => appendPassedCheckpointKey(prev, nextCellKey, checkpointKeySet));
         if (!startTime) setStartTime(Date.now());
       }
     },
-    [
-      checkpointKeySet,
-      finished,
-      goalActive,
-      goalExit,
-      maze,
-      player,
-      showHelpMap,
-      startTime,
-    ]
+    [checkpointKeySet, finished, goalActive, goalExit, maze, player, showHelpMap, startTime]
+  );
+
+  const handleKeyDown = useCallback(
+    /**
+     * キーボード入力を処理する。
+     * @param e キー押下イベント
+     */
+    (e: KeyboardEvent) => {
+      if (e.key === 'h' || e.key === 'H') {
+        e.preventDefault();
+        if (!e.repeat) setShowHelpMap((visible) => !visible);
+        return;
+      }
+      // ヘルプマップ表示中のみデバッグ開示トグルを受け付ける。
+      if (
+        enableMapDebugToggle &&
+        showHelpMap &&
+        (e.key === MAP_DEBUG_REVEAL_KEY || e.key === MAP_DEBUG_REVEAL_KEY_UPPER)
+      ) {
+        e.preventDefault();
+        if (!e.repeat) setRevealHiddenMapForDebug((visible) => !visible);
+        return;
+      }
+      // ヘルプ表示中は移動操作を無効化する。
+      if (showHelpMap) return;
+
+      if (!isMoveControlKey(e.key)) return;
+      e.preventDefault();
+      handleMoveControl(e.key);
+    },
+    [enableMapDebugToggle, handleMoveControl, showHelpMap]
   );
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
+
+  /**
+   * 前進入力を実行する。
+   */
+  const handleForward = useCallback(() => {
+    handleMoveControl('ArrowUp');
+  }, [handleMoveControl]);
+
+  /**
+   * 左回転入力を実行する。
+   */
+  const handleTurnLeft = useCallback(() => {
+    handleMoveControl('ArrowLeft');
+  }, [handleMoveControl]);
+
+  /**
+   * 右回転入力を実行する。
+   */
+  const handleTurnRight = useCallback(() => {
+    handleMoveControl('ArrowRight');
+  }, [handleMoveControl]);
+
+  /**
+   * ヘルプマップ表示状態をトグルする。
+   */
+  const handleToggleHelpMap = useCallback(() => {
+    setShowHelpMap((visible) => !visible);
+  }, []);
 
   /**
    * ゲーム状態を初期化して新しい迷路を開始する。
@@ -199,6 +242,10 @@ export const useMazeGameController = (): MazeGameController => {
     passedCheckpointCount,
     goalActive,
     lockedGoalAttemptCount,
+    handleForward,
+    handleTurnLeft,
+    handleTurnRight,
+    handleToggleHelpMap,
     handleRetry,
   };
 };

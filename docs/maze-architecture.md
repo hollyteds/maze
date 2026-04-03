@@ -2,13 +2,17 @@
 
 この文書は、React + TypeScript + Three.js で構成された現行迷路ゲーム実装の構成と処理フローを整理したものです。
 
-最終更新: 2026-04-03
+最終更新: 2026-04-04
 
 ## 対象ファイル
 
 - `src/MazeGame.tsx`
+- `src/components/GameStatusPanel.tsx`
 - `src/hooks/useMazeGameController.ts`
+- `src/hooks/useIsTouchDevice.ts`
+- `src/hooks/useViewportSize.ts`
 - `src/components/MazeView3D.tsx`
+- `src/components/maze3d/touchGestureInterpreter.ts`
 - `src/components/maze3d/GoalMessageOverlay.tsx`
 - `src/components/maze3d/cameraPose.ts`
 - `src/components/maze3d/mazeWorldBuilder.ts`
@@ -32,9 +36,13 @@
 
 | レイヤ | 主ファイル | 役割 |
 |---|---|---|
-| 画面構成 | `src/MazeGame.tsx` | HUD、3Dビュー、ヘルプマップ、リトライ導線の配置 |
-| 進行制御 | `src/hooks/useMazeGameController.ts` | 迷路初期化、キー入力処理、CP通過管理、ゴール判定、タイマー |
-| 3D描画 | `src/components/MazeView3D.tsx` | Three.jsのライフサイクル制御と描画更新の配線 |
+| 画面構成 | `src/MazeGame.tsx` | 通常UIとタッチ全画面UIの分岐、HUD/ポップアップ/ボタン配置 |
+| HUD表示部品 | `src/components/GameStatusPanel.tsx` | TIME/GOAL/CHECKPOINT/CP STATUS の共通描画 |
+| 進行制御 | `src/hooks/useMazeGameController.ts` | 迷路初期化、移動入力処理、CP通過管理、ゴール判定、タイマー |
+| デバイス判定 | `src/hooks/useIsTouchDevice.ts` | タッチ主体端末かどうかの判定 |
+| ビューポート購読 | `src/hooks/useViewportSize.ts` | 画面サイズ・向き判定用の幅/高さ監視 |
+| 3D描画 | `src/components/MazeView3D.tsx` | Three.jsのライフサイクル制御、表示サイズ追従、タッチ入力変換 |
+| タッチ入力解釈 | `src/components/maze3d/touchGestureInterpreter.ts` | タップ/スワイプを前進・回転へ変換する判定ロジック |
 | 3D演出UI | `src/components/maze3d/GoalMessageOverlay.tsx` | ゴール誘導/警告/クリアメッセージ表示 |
 | カメラ計算 | `src/components/maze3d/cameraPose.ts` | カメラ姿勢変換・角度補間計算 |
 | シーン破棄 | `src/components/maze3d/sceneObjectDisposer.ts` | Group配下メッシュの破棄とGPU資源解放 |
@@ -66,6 +74,11 @@
 - 出口の両端柱は常時赤色で表示する（未解放時も維持）。
 - 未解放時は出口に格子ゲート（牢屋風）を配置して封鎖する。
 - 円柱マーカーはチェックポイントのみ表示（スタート/ゴールには表示しない）。
+- タッチ端末では横向き時に常時全画面UIを使用する。
+- タッチ端末の縦向き時は横向き案内テキストのみ表示し、ゲーム画面は表示しない。
+- タッチ端末では `D` によるデバッグ開示操作を受け付けない。
+- タッチ全画面UIでは `HELP`（左下）で操作説明ポップアップ、`MAP`（右下）でヘルプマップを切り替える。
+- タッチ全画面UIの `TIME/GOAL/CHECKPOINT/CP STATUS` は画面最下部オーバーレイで表示する。
 
 ## 全体フロー
 
@@ -84,13 +97,21 @@ flowchart TD
   J --> J1[床/壁/柱/CPマーカー生成]
   J --> J2[出口外床(赤)生成]
   J --> J3[未解放時ゲート生成]
+  I --> J4[表示サイズ追従リサイズ]
+  I --> J5[TouchGestureInterpreterで入力変換]
 
   C --> K[keydown監視]
-  K --> L{入力}
+  K --> L{キーボード入力}
   L -->|↑| M[resolveForwardResult]
   L -->|←/→| N[rotate]
   L -->|H| O[ヘルプ表示切替]
-  L -->|D| P[デバッグ開示切替]
+  L -->|D| P[デバッグ開示切替※非タッチ時のみ]
+
+  I --> T1{タッチ入力}
+  T1 -->|タップ| T2[前進入力へ変換]
+  T1 -->|左右スワイプ| T3[回転入力へ変換]
+  T2 --> M
+  T3 --> N
 
   M --> Q{迷路内移動か}
   Q -->|Yes| R[player更新]
@@ -127,6 +148,8 @@ flowchart TD
 補足:
 - `goalActive = checkpoints.length === 0 || passedCheckpointCount === checkpoints.length`
 - カメラ補間中は `inputLockUntilRef` で矢印入力をロックする。
+- `useMazeGameController({ enableMapDebugToggle })` により `D` キー受付を切り替える。
+- `handleToggleHelpMap` でキーボード以外（タッチUIボタン）からもヘルプ表示を切り替える。
 
 ## 3Dワールド構築（`mazeWorldBuilder.ts`）
 
@@ -155,7 +178,7 @@ flowchart TD
 ## ヘルプマップ仕様（`HelpMap.tsx`）
 
 - 表示対象は基本「訪問済みセル」のみ。
-- `D` トグル時のみ未訪問領域を開示。
+- `D` トグル時のみ未訪問領域を開示（非タッチ時）。
 - スタートマーカーは表示しない。
 - ゴールは `goalExit` 方向へオフセットした `G` で表示。
 - CPは番号付きで表示（通過済み/未通過で色分け）。
@@ -169,6 +192,9 @@ flowchart TD
 - 位置/向き変更は `animateCameraTo` で `CAMERA_MOVE_DURATION_MS` 補間。
 - `goalActive` が `false -> true` に遷移した瞬間にゴール誘導表示。
 - `lockedGoalAttemptCount` 増加時に「チェックポイントを回収せよ！」を一定時間表示。
+- `ResizeObserver` と `window.resize` で表示領域に追従してレンダラーサイズ/投影行列を更新する。
+- タッチ入力は `onTouchStart/onTouchEnd` で判定し、タップを前進、左右スワイプを回転へ変換する。
+- `fullScreen` プロップ時は親領域いっぱいにキャンバスを表示する。
 
 ## 主要関数一覧
 
@@ -212,7 +238,26 @@ flowchart TD
 
 ### `src/hooks/useMazeGameController.ts`
 
-- `useMazeGameController()`: ゲーム全体状態と入力イベントを統合管理する。
+- `useMazeGameController(options)`: ゲーム全体状態と入力イベントを統合管理する。
+- `handleToggleHelpMap()`: ヘルプマップ表示状態をトグルする。
+
+### `src/hooks/useIsTouchDevice.ts`
+
+- `useIsTouchDevice()`: ポインタ特性とタッチポイント数からタッチ主体端末かを判定する。
+
+### `src/hooks/useViewportSize.ts`
+
+- `useViewportSize()`: 画面サイズ・端末向き判定用にビューポート幅/高さを購読する。
+
+### `src/components/GameStatusPanel.tsx`
+
+- `GameStatusPanel(...)`: TIME/GOAL/CHECKPOINT/CP STATUS の共通描画を行う。
+
+### `src/components/maze3d/touchGestureInterpreter.ts`
+
+- `TouchGestureInterpreter.begin(point)`: ジェスチャー開始点を記録する。
+- `TouchGestureInterpreter.resolve(endPoint)`: タップ/スワイプを前進・左右回転・無効へ判定する。
+- `TouchGestureInterpreter.cancel()`: 記録済みの開始点を破棄する。
 
 ### `src/components/maze3d/mazeWorldBuilder.ts`
 
@@ -247,6 +292,9 @@ flowchart TD
 
 - `VIEWPORT_WIDTH`, `VIEWPORT_HEIGHT`: 3Dビューの描画領域サイズを決める。
 - `CAMERA_MOVE_DURATION_MS`: 移動・回転時カメラ補間の所要時間を決める。
+- `TOUCH_SWIPE_TURN_THRESHOLD_PX`, `TOUCH_TAP_MOVE_TOLERANCE_PX`, `TOUCH_TAP_MAX_DURATION_MS`: タッチ入力を操作へ変換する判定しきい値を定義する。
+- `TOUCH_ACTION_BUTTON_SIZE_PX`, `TOUCH_OVERLAY_BOTTOM_PADDING_PX`, `TOUCH_LANDSCAPE_PROMPT_TEXT`: タッチ全画面UIの操作ボタン寸法・余白・縦向き案内文言を定義する。
+- `TOUCH_*_Z_INDEX` 群: タッチ全画面UIのステータス/ポップアップ/ボタンの前後関係を定義する。
 - `CAMERA_EYE_HEIGHT`, `CAMERA_PITCH_RAD`: 視点の高さと上下角（俯仰）を定義する。
 - `CAMERA_BACK_OFFSET`, `CAMERA_FOV_DEG`, `CAMERA_NEAR`, `CAMERA_FAR`: 視点後退量と投影パラメータ（画角・クリップ）を定義する。
 - `CAMERA_FOG_NEAR`, `CAMERA_FOG_FAR`: フォグの開始・終了距離を定義する。

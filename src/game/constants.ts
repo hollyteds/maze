@@ -2,9 +2,9 @@
 // 迷路サイズ・進行
 // ========================================
 // 迷路の横マス数。表示難易度の基準値。
-export const MAZE_WIDTH = 10;
+export const MAZE_WIDTH = 15;
 // 迷路の縦マス数。表示難易度の基準値。
-export const MAZE_HEIGHT = 10;
+export const MAZE_HEIGHT = 15;
 
 // ゴール表示を出口側へずらす比率。2D/3Dで同じ見え方を維持する。
 export const GOAL_EXIT_MARKER_OFFSET_RATIO = 0.62;
@@ -65,6 +65,32 @@ export const ENABLE_WALL_DEBUG_LOG = false;
 export const VIEWPORT_WIDTH = 760;
 // 3Dビューの縦幅（px）。UIレイアウトとキャンバスサイズの基準になる。
 export const VIEWPORT_HEIGHT = 380;
+// タッチの横スワイプを回転入力として扱う最小移動量（px）。小さくすると誤回転が増える。
+export const TOUCH_SWIPE_TURN_THRESHOLD_PX = 24;
+// タップ判定で許容する最大移動量（px）。大きくするとスワイプ誤判定が増える。
+export const TOUCH_TAP_MOVE_TOLERANCE_PX = 10;
+// タップとして扱う最大接触時間（ms）。長くすると長押しでも前進しやすくなる。
+export const TOUCH_TAP_MAX_DURATION_MS = 300;
+// タッチ全画面UIのアクションボタン外寸（px）。誤タップを減らすため最小44px以上を確保する。
+export const TOUCH_ACTION_BUTTON_SIZE_PX = 52;
+// タッチ全画面UIの下部オーバーレイ余白（px）。情報表示とボタンの干渉を避ける。
+export const TOUCH_OVERLAY_BOTTOM_PADDING_PX = 16;
+// 縦向き時に横向きを促す案内文言。全画面モード中はこの文言のみ表示する。
+export const TOUCH_LANDSCAPE_PROMPT_TEXT = '横向きにしてプレイしてください';
+// タッチ全画面UIのステータス表示レイヤー。ポップアップより背面に固定する。
+export const TOUCH_STATUS_OVERLAY_Z_INDEX = 12;
+// タッチ全画面UIのアクションボタン既定レイヤー。通常時はポップアップ背面に置く。
+export const TOUCH_ACTION_BUTTON_BASE_Z_INDEX = 14;
+// マップ表示オーバーレイのレイヤー。
+export const TOUCH_MAP_OVERLAY_Z_INDEX = 20;
+// マップ表示中にMAPボタンだけ前面へ出すレイヤー。
+export const TOUCH_MAP_BUTTON_ACTIVE_Z_INDEX = 24;
+// 操作ヘルプ表示オーバーレイのレイヤー。
+export const TOUCH_HELP_OVERLAY_Z_INDEX = 30;
+// 操作ヘルプ表示中にHELPボタンだけ前面へ出すレイヤー。
+export const TOUCH_HELP_BUTTON_ACTIVE_Z_INDEX = 34;
+// タッチ全画面UIのRETRYボタンレイヤー。
+export const TOUCH_RETRY_BUTTON_Z_INDEX = 22;
 // 迷路ワイヤー/輪郭の基準色。
 export const LINE_COLOR = '#9df7b5';
 // ビュー外枠のグロー色。

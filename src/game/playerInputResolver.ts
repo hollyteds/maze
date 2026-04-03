@@ -7,14 +7,18 @@ export type ForwardResult = {
   reachedGoal: boolean;
   attemptedLockedGoal: boolean;
 };
+// 移動/回転に利用する操作キー一覧。入力系追加時はここを基準に判定を揃える。
+export const MOVE_CONTROL_KEYS = ['ArrowUp', 'ArrowLeft', 'ArrowRight'] as const;
+// 移動/回転操作キーの型。
+export type MoveControlKey = (typeof MOVE_CONTROL_KEYS)[number];
 
 /**
  * 移動/回転に使う矢印キーかどうかを判定する。
  * @param key キー入力文字列
  * @returns 移動入力に使う矢印キーならtrue
  */
-export const isMoveControlKey = (key: string): boolean =>
-  key === 'ArrowUp' || key === 'ArrowLeft' || key === 'ArrowRight';
+export const isMoveControlKey = (key: string): key is MoveControlKey =>
+  MOVE_CONTROL_KEYS.includes(key as MoveControlKey);
 
 /**
  * 座標が迷路範囲内かどうかを判定する。
