@@ -1,4 +1,3 @@
-import React from 'react';
 import { CompassOverlay } from './components/CompassOverlay';
 import { HelpMap } from './components/HelpMap';
 import { MazeView3D } from './components/MazeView3D';
@@ -14,6 +13,7 @@ export default function MazeGame() {
   // ゲーム進行に必要な状態とハンドラをフックから取得する。
   const {
     maze,
+    goalExit,
     player,
     elapsed,
     finished,
@@ -24,6 +24,7 @@ export default function MazeGame() {
     passedCheckpointKeys,
     passedCheckpointCount,
     goalActive,
+    lockedGoalAttemptCount,
     handleRetry,
   } = useMazeGameController();
 
@@ -42,6 +43,8 @@ export default function MazeGame() {
       <div style={{ position: 'relative', width: VIEWPORT_WIDTH, margin: '0 auto' }}>
         <MazeView3D
           maze={maze}
+          goalExit={goalExit}
+          lockedGoalAttemptCount={lockedGoalAttemptCount}
           player={player}
           checkpoints={checkpoints}
           passedCheckpointKeys={passedCheckpointKeys}
@@ -65,12 +68,14 @@ export default function MazeGame() {
             <div>
               <HelpMap
                 maze={maze}
+                goalExit={goalExit}
                 player={player}
                 checkpoints={checkpoints}
                 passedCheckpointKeys={passedCheckpointKeys}
                 visitedCellKeys={visitedCellKeys}
                 revealHiddenMapForDebug={revealHiddenMapForDebug}
                 goalActive={goalActive}
+                finished={finished}
               />
               <p style={{ marginTop: 10, marginBottom: 0, fontSize: 13, color: '#cbffd9' }}>
                 H: CLOSE HELP MAP / D: TOGGLE DEBUG REVEAL
@@ -121,7 +126,7 @@ export default function MazeGame() {
       <div style={{ marginTop: 20 }}>
         <p>操作: ↑ 前進 / ← 左回転 / → 右回転</p>
         <p>H: ヘルプマップ表示切替</p>
-        <p>ゴール: 右下隅まで到達</p>
+        <p>ゴール: 外周の出口から脱出</p>
       </div>
     </div>
   );

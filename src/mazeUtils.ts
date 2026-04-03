@@ -11,6 +11,19 @@ export type Cell = {
 // 2次元セル配列で表現する迷路本体。
 export type Maze = Cell[][];
 
+// 迷路セル座標を表す共通型。
+export type MazePosition = {
+  x: number;
+  y: number;
+};
+
+// 迷路外への出口（ゴール）を表す座標と方向。
+export type GoalExit = {
+  x: number;
+  y: number;
+  dir: Direction;
+};
+
 /**
  * 深さ優先探索（再帰）で完全迷路を生成する。
  * @param width 迷路の横マス数
@@ -85,9 +98,140 @@ export interface PlayerState {
 }
 
 /**
- * ゲーム開始時のプレイヤー初期状態を返す。
- * @returns 初期位置（左上）かつ東向きの状態
+ * セルの開通方向数（壁でない辺の数）を数える。
+ * @param cell 判定対象セル
+ * @returns 開いている方向の本数
  */
-export function getInitialPlayerState(): PlayerState {
-  return { x: 0, y: 0, dir: 'E' };
+const countOpenPaths = (cell: Cell): number =>
+  (cell.walls.N ? 0 : 1) +
+  (cell.walls.E ? 0 : 1) +
+  (cell.walls.S ? 0 : 1) +
+  (cell.walls.W ? 0 : 1);
+
+/**
+ * セルが行き止まりかどうかを判定する。
+ * @param cell 判定対象セル
+ * @returns 通路1本のみなら true
+ */
+const isDeadEndCell = (cell: Cell): boolean => countOpenPaths(cell) === 1;
+
+/**
+ * セルが外周セルかどうかを判定する。
+ * @param x セルX座標
+ * @param y セルY座標
+ * @param width 迷路の横マス数
+ * @param height 迷路の縦マス数
+ * @returns 外周セルなら true
+ */
+const isEdgeCell = (x: number, y: number, width: number, height: number): boolean =>
+  x === 0 || x === width - 1 || y === 0 || y === height - 1;
+
+/**
+ * 外周セルから迷路外へ向かう方向一覧を返す。
+ * @param x セルX座標
+ * @param y セルY座標
+ * @param width 迷路の横マス数
+ * @param height 迷路の縦マス数
+ * @returns 迷路外向き方向配列（1〜2要素）
+ */
+const getOutwardDirections = (
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): Direction[] => {
+  const directions: Direction[] = [];
+  if (y === 0) directions.push('N');
+  if (x === width - 1) directions.push('E');
+  if (y === height - 1) directions.push('S');
+  if (x === 0) directions.push('W');
+  return directions;
+};
+
+/**
+ * 迷路内からランダムな開始座標を返す（行き止まり優先）。
+ * @param maze 判定対象の迷路データ
+ * @param excluded 選択対象から除外する座標
+ * @returns 候補からランダムに選ばれた座標
+ */
+export function getRandomStartPosition(
+  maze: Maze,
+  excluded: ReadonlyArray<MazePosition>
+): MazePosition {
+  const height = maze.length;
+  const width = maze[0]?.length ?? 0;
+  if (height === 0 || width === 0) return { x: 0, y: 0 };
+
+  const excludedKeys = new Set(excluded.map((point) => `${point.x},${point.y}`));
+  const deadEndCandidates: MazePosition[] = [];
+  const fallbackCandidates: MazePosition[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const key = `${x},${y}`;
+      if (excludedKeys.has(key)) continue;
+      if (isDeadEndCell(maze[y][x])) {
+        deadEndCandidates.push({ x, y });
+      } else {
+        fallbackCandidates.push({ x, y });
+      }
+    }
+  }
+
+  const selectionPool = deadEndCandidates.length > 0 ? deadEndCandidates : fallbackCandidates;
+  if (selectionPool.length === 0) return { x: 0, y: 0 };
+  return selectionPool[Math.floor(Math.random() * selectionPool.length)];
+}
+
+/**
+ * 外周セルの壁を開けた先となるゴール出口を生成する（行き止まり優先はしない）。
+ * @param maze 生成済み迷路データ（出口壁を直接開ける）
+ * @param excluded 選択対象から除外する座標
+ * @returns 出口セル座標と迷路外向き方向
+ */
+export function getRandomGoalExit(
+  maze: Maze,
+  excluded: ReadonlyArray<MazePosition>
+): GoalExit {
+  const height = maze.length;
+  const width = maze[0]?.length ?? 0;
+  if (height === 0 || width === 0) return { x: 0, y: 0, dir: 'N' };
+
+  const excludedKeys = new Set(excluded.map((point) => `${point.x},${point.y}`));
+  const edgeCandidates: MazePosition[] = [];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!isEdgeCell(x, y, width, height)) continue;
+      const key = `${x},${y}`;
+      if (excludedKeys.has(key)) continue;
+      edgeCandidates.push({ x, y });
+    }
+  }
+
+  const fallback = edgeCandidates.length > 0 ? edgeCandidates : [{ x: 0, y: 0 }];
+  const selectedCell = fallback[Math.floor(Math.random() * fallback.length)];
+  const outwardDirections = getOutwardDirections(selectedCell.x, selectedCell.y, width, height);
+  const selectedDirection =
+    outwardDirections[Math.floor(Math.random() * outwardDirections.length)] ?? 'N';
+
+  // 出口セルの外周壁を開けて、迷路外へ抜ける通路を作る。
+  maze[selectedCell.y][selectedCell.x].walls[selectedDirection] = false;
+
+  return { x: selectedCell.x, y: selectedCell.y, dir: selectedDirection };
+}
+
+/**
+ * ゲーム開始時のプレイヤー初期状態を返す。
+ * @param maze 生成済み迷路データ
+ * @param start 開始セル座標
+ * @returns 開始セル位置かつ開始セルで開いている方向を向いた状態
+ */
+export function getInitialPlayerState(maze: Maze, start: MazePosition): PlayerState {
+  const cell = maze[start.y]?.[start.x];
+  if (!cell) return { x: start.x, y: start.y, dir: 'E' };
+
+  // 開通方向の優先順。複数開いている場合でも初期向きを安定させる。
+  const directionPriority: Direction[] = ['N', 'E', 'S', 'W'];
+  const openDirection = directionPriority.find((dir) => !cell.walls[dir]) ?? 'E';
+  return { x: start.x, y: start.y, dir: openDirection };
 }

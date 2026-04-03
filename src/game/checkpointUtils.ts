@@ -67,7 +67,7 @@ const shuffleInPlace = <T>(items: T[]): T[] => {
 /**
  * 指定要素を除外し、袋小路を優先して必要数のチェックポイントを返す。
  * @param maze 迷路データ
- * @param excluded 配置禁止セル（例: START/GOAL）
+ * @param excluded 配置禁止セル（例: スタート/ゴール）
  * @returns 袋小路優先で配置したチェックポイント配列
  */
 export const generateCheckpoints = (

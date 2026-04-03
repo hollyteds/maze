@@ -1,8 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Checkpoint, toCheckpointKey } from '../game/checkpointUtils';
 import {
-  CAMERA_BACK_OFFSET,
   CAMERA_EYE_HEIGHT,
   CAMERA_FAR,
   CAMERA_FOG_FAR,
@@ -13,22 +12,24 @@ import {
   CAMERA_PITCH_RAD,
   ENABLE_WALL_DEBUG_LOG,
   GLOW_COLOR,
-  GOAL,
-  GOAL_LOCKED_WARNING_BLINK_DURATION_SEC,
   GOAL_LOCKED_WARNING_DURATION_MS,
-  GOAL_PROMPT_BLINK_DURATION_SEC,
-  GOAL_PROMPT_TEXT_COLOR,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
 } from '../game/constants';
-import { Maze, PlayerState } from '../mazeUtils';
+import { GoalExit, Maze, PlayerState } from '../mazeUtils';
+import { GoalMessageOverlay } from './maze3d/GoalMessageOverlay';
+import { CameraPose, easeInOutCubic, getShortestAngleDelta, toCameraPose } from './maze3d/cameraPose';
 import { buildMazeWorld } from './maze3d/mazeWorldBuilder';
-import { toWorldX, toWorldZ } from './maze3d/worldCoordinates';
+import { clearGroup } from './maze3d/sceneObjectDisposer';
 
 // MazeView3Dコンポーネントの入力プロパティ。
 type MazeView3DProps = {
   // 投影元となる迷路データ。
   maze: Maze;
+  // ゴール出口（セル座標と外向き方向）。
+  goalExit: GoalExit;
+  // 未解放ゴールへ出ようとした回数（警告表示トリガー）。
+  lockedGoalAttemptCount: number;
   // 投影元となるプレイヤー位置と向き。
   player: PlayerState;
   // 全チェックポイント座標。
@@ -41,116 +42,11 @@ type MazeView3DProps = {
   finished: boolean;
 };
 
-// カメラ補間で扱う姿勢値（平面位置+方位）。
-type CameraPose = {
-  x: number;
-  z: number;
-  yaw: number;
-};
-
-// 平面方向ベクトル（XZ）。
-type XZVector = {
-  x: number;
-  z: number;
-};
-
-/**
- * プレイヤー方角をThree.jsのY回転角へ変換する。
- * @param dir 方角コード（N/E/S/W）
- * @returns カメラのyaw角（ラジアン）
- */
-const toCameraYaw = (dir: PlayerState['dir']): number => {
-  if (dir === 'N') return 0;
-  if (dir === 'E') return -Math.PI / 2;
-  if (dir === 'S') return Math.PI;
-  return Math.PI / 2;
-};
-
-/**
- * プレイヤー向きの前方ベクトルを返す。
- * @param dir 方角コード（N/E/S/W）
- * @returns XZ平面の前方単位ベクトル
- */
-const toForwardVector = (dir: PlayerState['dir']): XZVector => {
-  if (dir === 'N') return { x: 0, z: -1 };
-  if (dir === 'E') return { x: 1, z: 0 };
-  if (dir === 'S') return { x: 0, z: 1 };
-  return { x: -1, z: 0 };
-};
-
-/**
- * 方角つきプレイヤー状態をカメラ姿勢へ変換する。
- * @param player プレイヤー座標と向き
- * @returns カメラ配置に使う姿勢値
- */
-const toCameraPose = (player: PlayerState): CameraPose => ({
-  x: toWorldX(player.x) - toForwardVector(player.dir).x * CAMERA_BACK_OFFSET,
-  z: toWorldZ(player.y) - toForwardVector(player.dir).z * CAMERA_BACK_OFFSET,
-  yaw: toCameraYaw(player.dir),
-});
-
-/**
- * 角度を -PI..PI の範囲へ正規化する。
- * @param angle 正規化前の角度（ラジアン）
- * @returns 正規化後角度
- */
-const normalizeAngle = (angle: number): number => {
-  let normalized = angle;
-  while (normalized <= -Math.PI) normalized += Math.PI * 2;
-  while (normalized > Math.PI) normalized -= Math.PI * 2;
-  return normalized;
-};
-
-/**
- * fromからtoへ最短回転で到達する角度差を返す。
- * @param from 開始角度（ラジアン）
- * @param to 目標角度（ラジアン）
- * @returns 最短角度差（ラジアン）
- */
-const getShortestAngleDelta = (from: number, to: number): number =>
-  normalizeAngle(to - from);
-
-/**
- * イージング付き補間係数を返す。
- * @param t 0..1 の時間進捗
- * @returns 0..1 のイージング済み係数
- */
-const easeInOutCubic = (t: number): number =>
-  t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
-
-/**
- * オブジェクト配下のジオメトリ/マテリアルを破棄する。
- * @param root 破棄対象ルート
- */
-const disposeObject3D = (root: THREE.Object3D) => {
-  root.traverse((child) => {
-    const meshLike = child as THREE.Mesh;
-    if (meshLike.geometry) {
-      meshLike.geometry.dispose();
-    }
-    if (Array.isArray(meshLike.material)) {
-      meshLike.material.forEach((material) => material.dispose());
-    } else if (meshLike.material) {
-      meshLike.material.dispose();
-    }
-  });
-};
-
-/**
- * グループ内オブジェクトを全削除してGPU資源を解放する。
- * @param group クリア対象のグループ
- */
-const clearGroup = (group: THREE.Group) => {
-  const targets = [...group.children];
-  targets.forEach((child) => {
-    group.remove(child);
-    disposeObject3D(child);
-  });
-};
-
 /**
  * 1人称の3D迷路ビューをThree.jsで描画する。
  * @param maze 迷路データ
+ * @param goalExit ゴール出口（セル座標と外向き方向）
+ * @param lockedGoalAttemptCount 未解放ゴール試行回数
  * @param player プレイヤー位置と向き
  * @param checkpoints 全チェックポイント座標
  * @param passedCheckpointKeys 通過済みチェックポイント座標キー集合
@@ -160,6 +56,8 @@ const clearGroup = (group: THREE.Group) => {
  */
 export function MazeView3D({
   maze,
+  goalExit,
+  lockedGoalAttemptCount,
   player,
   checkpoints,
   passedCheckpointKeys,
@@ -189,8 +87,6 @@ export function MazeView3D({
   const previousGoalActiveRef = useRef(goalActive);
   // ゴール未解放通過警告の消去タイマーID。
   const goalLockedWarningTimerRef = useRef<number | null>(null);
-  // 前フレーム位置。ゴールへの進入を検知する。
-  const previousPlayerPosRef = useRef({ x: player.x, y: player.y });
   // カメラ補間判定用の前回プレイヤー状態。
   const previousCameraPlayerRef = useRef({ x: player.x, y: player.y, dir: player.dir });
   // 同一内容のデバッグログ連続出力を抑制するための前回スナップショット。
@@ -274,6 +170,7 @@ export function MazeView3D({
     // 新ゲーム開始などで未解放へ戻ったら表示をリセットする。
     if (!goalActive) {
       setShowGoalPrompt(false);
+      setShowGoalLockedWarning(false);
       return;
     }
     // チェックポイント達成でゴールが解放された瞬間のみ表示する。
@@ -283,15 +180,8 @@ export function MazeView3D({
   }, [goalActive, checkpoints.length]);
 
   useEffect(() => {
-    const previousPos = previousPlayerPosRef.current;
-    previousPlayerPosRef.current = { x: player.x, y: player.y };
-    // 「未解放ゴールへの進入」時だけ警告を表示する。
-    const enteredLockedGoal =
-      !goalActive &&
-      player.x === GOAL.x &&
-      player.y === GOAL.y &&
-      (previousPos.x !== GOAL.x || previousPos.y !== GOAL.y);
-    if (!enteredLockedGoal) return;
+    // 未解放状態で外へ出ようとしたタイミングだけ警告を表示する。
+    if (lockedGoalAttemptCount <= 0) return;
 
     setShowGoalLockedWarning(true);
     if (goalLockedWarningTimerRef.current !== null) {
@@ -301,7 +191,7 @@ export function MazeView3D({
       setShowGoalLockedWarning(false);
       goalLockedWarningTimerRef.current = null;
     }, GOAL_LOCKED_WARNING_DURATION_MS);
-  }, [goalActive, player.x, player.y]);
+  }, [lockedGoalAttemptCount]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -358,12 +248,13 @@ export function MazeView3D({
     buildMazeWorld({
       root: worldGroup,
       maze,
+      goalExit,
       checkpoints,
       passedCheckpointKeys,
       goalActive,
     });
     renderScene();
-  }, [maze, checkpoints, passedCheckpointKeys, goalActive]);
+  }, [maze, goalExit, checkpoints, passedCheckpointKeys, goalActive]);
 
   useEffect(() => {
     const previous = previousCameraPlayerRef.current;
@@ -398,6 +289,7 @@ export function MazeView3D({
         yaw: Number(camera.rotation.y.toFixed(3)),
       },
       checkpointKeys: checkpoints.map((checkpoint) => toCheckpointKey(checkpoint.x, checkpoint.y)),
+      goalExit,
       passedCheckpointCount: passedCheckpointKeys.size,
       objectCount: worldGroup.children.length,
       kindCounts,
@@ -408,7 +300,7 @@ export function MazeView3D({
     if (lastDebugSnapshotRef.current === snapshot) return;
     lastDebugSnapshotRef.current = snapshot;
     console.log('[MazeView3D] three-world-debug', debugPayload);
-  }, [checkpoints, passedCheckpointKeys, player]);
+  }, [checkpoints, goalExit, passedCheckpointKeys, player]);
 
   return (
     <div
@@ -421,9 +313,6 @@ export function MazeView3D({
         overflow: 'hidden',
       }}
     >
-      <style>
-        {`@keyframes maze-view-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }`}
-      </style>
       <canvas
         ref={canvasRef}
         width={VIEWPORT_WIDTH}
@@ -436,31 +325,11 @@ export function MazeView3D({
           display: 'block',
         }}
       />
-      {(showGoalPrompt || showGoalLockedWarning || finished) && (
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            top: 30,
-            transform: 'translateX(-50%)',
-            fontSize: 15,
-            fontFamily: '"Courier New", "Lucida Console", monospace',
-            color: GOAL_PROMPT_TEXT_COLOR,
-            animationName: 'maze-view-blink',
-            animationDuration: `${
-              showGoalLockedWarning
-                ? GOAL_LOCKED_WARNING_BLINK_DURATION_SEC
-                : GOAL_PROMPT_BLINK_DURATION_SEC
-            }s`,
-            animationIterationCount: 'infinite',
-            pointerEvents: 'none',
-            whiteSpace: 'nowrap',
-            textShadow: '0 0 8px rgba(203, 255, 217, 0.45)',
-          }}
-        >
-          {showGoalLockedWarning ? 'チェックポイントを回収せよ！' : finished ? 'GOAL！' : 'ゴールに向かえ！'}
-        </div>
-      )}
+      <GoalMessageOverlay
+        showGoalPrompt={showGoalPrompt}
+        showGoalLockedWarning={showGoalLockedWarning}
+        finished={finished}
+      />
       <div
         style={{
           position: 'absolute',

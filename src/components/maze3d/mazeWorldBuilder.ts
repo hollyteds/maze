@@ -1,35 +1,33 @@
 import * as THREE from 'three';
 import { Checkpoint, toCheckpointKey } from '../../game/checkpointUtils';
 import {
-  CHECKPOINT_CLEARED_COLOR,
-  CHECKPOINT_CLEARED_WALL_COLOR,
-  CHECKPOINT_PENDING_COLOR,
-  CHECKPOINT_PENDING_WALL_COLOR,
   FLOOR_BASE_COLOR,
   FLOOR_BASE_OPACITY,
-  GOAL,
-  GOAL_ACTIVE_COLOR,
-  GOAL_ACTIVE_FLOOR_COLOR,
-  GOAL_ACTIVE_WALL_COLOR,
-  GOAL_INACTIVE_COLOR,
-  GOAL_INACTIVE_FLOOR_COLOR,
-  GOAL_INACTIVE_WALL_COLOR,
+  GOAL_GATE_BAR_COLOR,
+  GOAL_GATE_BAR_COUNT,
+  GOAL_GATE_BAR_THICKNESS,
+  GOAL_OUTSIDE_FLOOR_COLOR,
+  GOAL_OPEN_PILLAR_COLOR,
   MARKER_HEIGHT,
   MARKER_RADIUS,
-  START,
-  START_WALL_ACCENT_COLOR,
   WALL_EDGE_COLOR,
   WALL_FILL_COLOR,
   WALL_PILLAR_SIZE,
-  WALL_PILLAR_TEXTURE_HEIGHT,
-  WALL_PILLAR_TEXTURE_WIDTH,
   WORLD_CELL_SIZE,
   WORLD_FLOOR_ELEVATION,
   WORLD_FLOOR_Y,
   WORLD_WALL_HEIGHT,
   WORLD_WALL_THICKNESS,
 } from '../../game/constants';
-import { Cell, Maze } from '../../mazeUtils';
+import { Cell, GoalExit, Maze } from '../../mazeUtils';
+import { getGoalOpeningCenter, getGoalPillarPoints } from './goalExitGeometry';
+import {
+  resolveFloorColor,
+  resolveMarkerColor,
+  resolveWallAccentColor,
+  toThreeColorInfo,
+} from './mazeCellColorResolvers';
+import { getWallPillarTexture } from './wallPillarTexture';
 import { toWorldX, toWorldZ } from './worldCoordinates';
 
 // 迷路壁向きの識別子。
@@ -49,13 +47,11 @@ type AdjacentWallFace = {
 export type MazeWorldBuildParams = {
   root: THREE.Group;
   maze: Maze;
+  goalExit: GoalExit;
   checkpoints: Checkpoint[];
   passedCheckpointKeys: Set<string>;
   goalActive: boolean;
 };
-
-// 柱テクスチャのキャッシュ。再生成を避けて描画更新時の負荷を抑える。
-let wallPillarTextureCache: THREE.CanvasTexture | null = null;
 
 /**
  * セル向きごとの壁をこのセル側から描くべきか判定する。
@@ -77,168 +73,6 @@ const shouldDrawWallFromCell = (
   if (dir === 'N' || dir === 'W') return true;
   if (dir === 'E') return x === width - 1;
   return y === height - 1;
-};
-
-/**
- * 柱へ貼るシームレステクスチャを生成する。
- * @returns 生成したCanvasTexture
- */
-const createWallPillarTexture = (): THREE.CanvasTexture => {
-  const canvas = document.createElement('canvas');
-  canvas.width = WALL_PILLAR_TEXTURE_WIDTH;
-  canvas.height = WALL_PILLAR_TEXTURE_HEIGHT;
-  const context = canvas.getContext('2d');
-  if (!context) {
-    const fallbackTexture = new THREE.CanvasTexture(canvas);
-    fallbackTexture.colorSpace = THREE.SRGBColorSpace;
-    return fallbackTexture;
-  }
-
-  const gradient = context.createLinearGradient(0, 0, 0, WALL_PILLAR_TEXTURE_HEIGHT);
-  gradient.addColorStop(0, '#8db89a');
-  gradient.addColorStop(0.5, '#7aa58a');
-  gradient.addColorStop(1, '#6f977f');
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, WALL_PILLAR_TEXTURE_WIDTH, WALL_PILLAR_TEXTURE_HEIGHT);
-
-  // 列方向は均一色のまま、横帯だけを重ねて柱の縦シーム感を抑える。
-  for (let y = 0; y < WALL_PILLAR_TEXTURE_HEIGHT; y += 8) {
-    context.fillStyle = y % 16 === 0 ? 'rgba(18, 32, 24, 0.18)' : 'rgba(224, 255, 232, 0.06)';
-    context.fillRect(0, y, WALL_PILLAR_TEXTURE_WIDTH, 1);
-  }
-
-  for (let y = 0; y < WALL_PILLAR_TEXTURE_HEIGHT; y += 2) {
-    const alpha = 0.015 + Math.random() * 0.02;
-    context.fillStyle = `rgba(0, 0, 0, ${alpha})`;
-    context.fillRect(0, y, WALL_PILLAR_TEXTURE_WIDTH, 1);
-  }
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-  return texture;
-};
-
-/**
- * 柱テクスチャを取得する（未生成なら生成してキャッシュする）。
- * @returns 柱描画に使うCanvasTexture
- */
-const getWallPillarTexture = (): THREE.CanvasTexture => {
-  if (!wallPillarTextureCache) {
-    wallPillarTextureCache = createWallPillarTexture();
-  }
-  return wallPillarTextureCache;
-};
-
-/**
- * CSSカラー文字列をThree.js用の色+透明度へ変換する。
- * @param color CSSカラー（`#rrggbb` / `rgb(...)` / `rgba(...)`）
- * @returns Three.js描画で使う色情報
- */
-const toThreeColorInfo = (
-  color: string
-): { color: THREE.ColorRepresentation; opacity: number } => {
-  const rgbaMatch =
-    color.match(
-      /^rgba\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)\s*\)$/i
-    ) ??
-    color.match(/^rgb\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)\s*\)$/i);
-
-  if (rgbaMatch) {
-    const r = Number(rgbaMatch[1]);
-    const g = Number(rgbaMatch[2]);
-    const b = Number(rgbaMatch[3]);
-    const alpha = rgbaMatch[4] ? Number(rgbaMatch[4]) : 1;
-    return {
-      color: new THREE.Color(r / 255, g / 255, b / 255),
-      opacity: Number.isFinite(alpha) ? alpha : 1,
-    };
-  }
-
-  const threeColor = new THREE.Color();
-  threeColor.setStyle(color);
-  return { color: threeColor, opacity: 1 };
-};
-
-/**
- * 床色をセル属性から決定する。
- * @param cellX セルX座標
- * @param cellY セルY座標
- * @param checkpointKeySet チェックポイント存在キー集合
- * @param passedCheckpointKeys 通過済みチェックポイントキー集合
- * @param goalActive ゴール有効化状態
- * @returns 床色文字列
- */
-const resolveFloorColor = (
-  cellX: number,
-  cellY: number,
-  checkpointKeySet: Set<string>,
-  passedCheckpointKeys: Set<string>,
-  goalActive: boolean
-): string => {
-  if (cellX === START.x && cellY === START.y) return 'rgba(140, 230, 255, 0.24)';
-  if (cellX === GOAL.x && cellY === GOAL.y) {
-    return goalActive ? GOAL_ACTIVE_FLOOR_COLOR : GOAL_INACTIVE_FLOOR_COLOR;
-  }
-  const key = toCheckpointKey(cellX, cellY);
-  if (!checkpointKeySet.has(key)) return FLOOR_BASE_COLOR;
-  return passedCheckpointKeys.has(key)
-    ? 'rgba(123, 181, 138, 0.24)'
-    : 'rgba(255, 217, 140, 0.24)';
-};
-
-/**
- * マーカー柱の色をセル属性から決定する。
- * @param cellX セルX座標
- * @param cellY セルY座標
- * @param checkpointKeySet チェックポイント存在キー集合
- * @param passedCheckpointKeys 通過済みチェックポイントキー集合
- * @param goalActive ゴール有効化状態
- * @returns マーカー色。不要ならnull
- */
-const resolveMarkerColor = (
-  cellX: number,
-  cellY: number,
-  checkpointKeySet: Set<string>,
-  passedCheckpointKeys: Set<string>,
-  goalActive: boolean
-): string | null => {
-  if (cellX === START.x && cellY === START.y) return '#8ce6ff';
-  if (cellX === GOAL.x && cellY === GOAL.y) return goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR;
-  const key = toCheckpointKey(cellX, cellY);
-  if (!checkpointKeySet.has(key)) return null;
-  return passedCheckpointKeys.has(key) ? CHECKPOINT_CLEARED_COLOR : CHECKPOINT_PENDING_COLOR;
-};
-
-/**
- * 壁色強調の対象セル色を返す（スタート/チェックポイント/ゴール）。
- * @param cellX セルX座標
- * @param cellY セルY座標
- * @param checkpointKeySet チェックポイント存在キー集合
- * @param passedCheckpointKeys 通過済みチェックポイントキー集合
- * @param goalActive ゴール有効化状態
- * @returns 強調色。対象外セルならnull
- */
-const resolveWallAccentColor = (
-  cellX: number,
-  cellY: number,
-  checkpointKeySet: Set<string>,
-  passedCheckpointKeys: Set<string>,
-  goalActive: boolean
-): string | null => {
-  if (cellX === START.x && cellY === START.y) {
-    return START_WALL_ACCENT_COLOR;
-  }
-  if (cellX === GOAL.x && cellY === GOAL.y) {
-    return goalActive ? GOAL_ACTIVE_WALL_COLOR : GOAL_INACTIVE_WALL_COLOR;
-  }
-  const key = toCheckpointKey(cellX, cellY);
-  if (!checkpointKeySet.has(key)) return null;
-  return passedCheckpointKeys.has(key)
-    ? CHECKPOINT_CLEARED_WALL_COLOR
-    : CHECKPOINT_PENDING_WALL_COLOR;
 };
 
 /**
@@ -293,6 +127,8 @@ class MazeWorldBuilder {
   private readonly root: THREE.Group;
   // 描画対象の迷路データ。
   private readonly maze: Maze;
+  // ゴール出口情報。
+  private readonly goalExit: GoalExit;
   // 通過済みチェックポイントキー集合。
   private readonly passedCheckpointKeys: Set<string>;
   // ゴール有効化状態。
@@ -311,6 +147,7 @@ class MazeWorldBuilder {
   constructor(params: MazeWorldBuildParams) {
     this.root = params.root;
     this.maze = params.maze;
+    this.goalExit = params.goalExit;
     this.passedCheckpointKeys = params.passedCheckpointKeys;
     this.goalActive = params.goalActive;
     this.height = this.maze.length;
@@ -325,7 +162,40 @@ class MazeWorldBuilder {
    */
   build(): void {
     this.buildCells();
+    this.buildGoalOutsideFloor();
     this.buildPillars();
+    this.buildLockedGoalGate();
+  }
+
+  /**
+   * 出口の外側へ常時赤色の床を配置する。
+   */
+  private buildGoalOutsideFloor(): void {
+    const center = getGoalOpeningCenter(this.goalExit);
+    let offsetX = 0;
+    let offsetZ = 0;
+    if (this.goalExit.dir === 'N') offsetZ = -WORLD_CELL_SIZE / 2;
+    if (this.goalExit.dir === 'E') offsetX = WORLD_CELL_SIZE / 2;
+    if (this.goalExit.dir === 'S') offsetZ = WORLD_CELL_SIZE / 2;
+    if (this.goalExit.dir === 'W') offsetX = -WORLD_CELL_SIZE / 2;
+    const floorColorInfo = toThreeColorInfo(GOAL_OUTSIDE_FLOOR_COLOR);
+    const outsideFloor = new THREE.Mesh(
+      new THREE.PlaneGeometry(WORLD_CELL_SIZE, WORLD_CELL_SIZE),
+      new THREE.MeshBasicMaterial({
+        color: floorColorInfo.color,
+        transparent: floorColorInfo.opacity < 1,
+        opacity: floorColorInfo.opacity,
+        side: THREE.DoubleSide,
+      })
+    );
+    outsideFloor.rotation.x = -Math.PI / 2;
+    outsideFloor.position.set(
+      center.x + offsetX,
+      WORLD_FLOOR_Y + WORLD_FLOOR_ELEVATION,
+      center.z + offsetZ
+    );
+    outsideFloor.userData.kind = 'goal-outside-floor';
+    this.root.add(outsideFloor);
   }
 
   /**
@@ -362,8 +232,7 @@ class MazeWorldBuilder {
       cellX,
       cellY,
       this.checkpointKeySet,
-      this.passedCheckpointKeys,
-      this.goalActive
+      this.passedCheckpointKeys
     );
     const floorColorInfo = toThreeColorInfo(floorColor);
     const floorMaterial = new THREE.MeshBasicMaterial({
@@ -399,8 +268,7 @@ class MazeWorldBuilder {
       cellX,
       cellY,
       this.checkpointKeySet,
-      this.passedCheckpointKeys,
-      this.goalActive
+      this.passedCheckpointKeys
     );
     if (!markerColor) return;
 
@@ -477,8 +345,7 @@ class MazeWorldBuilder {
         adjacent.x,
         adjacent.y,
         this.checkpointKeySet,
-        this.passedCheckpointKeys,
-        this.goalActive
+        this.passedCheckpointKeys
       );
       if (!accent) return;
       wallFaceColors[adjacent.faceIndex] = accent;
@@ -511,14 +378,21 @@ class MazeWorldBuilder {
    * 壁の有無に関係なく全交点へ柱を配置する。
    */
   private buildPillars(): void {
+    const goalPillarKeySet = new Set(
+      getGoalPillarPoints(this.goalExit).map((point) => `${point.x},${point.z}`)
+    );
     for (let gridZ = 0; gridZ <= this.height; gridZ++) {
       for (let gridX = 0; gridX <= this.width; gridX++) {
+        const isGoalPillar = goalPillarKeySet.has(`${gridX},${gridZ}`);
+        const pillarMaterial = isGoalPillar
+          ? new THREE.MeshBasicMaterial({ color: GOAL_OPEN_PILLAR_COLOR })
+          : new THREE.MeshBasicMaterial({
+              color: '#d8f3df',
+              map: getWallPillarTexture(),
+            });
         const pillarMesh = new THREE.Mesh(
           new THREE.BoxGeometry(WALL_PILLAR_SIZE, WORLD_WALL_HEIGHT, WALL_PILLAR_SIZE),
-          new THREE.MeshBasicMaterial({
-            color: '#d8f3df',
-            map: getWallPillarTexture(),
-          })
+          pillarMaterial
         );
         pillarMesh.position.set(
           gridX * WORLD_CELL_SIZE,
@@ -529,6 +403,59 @@ class MazeWorldBuilder {
         this.root.add(pillarMesh);
       }
     }
+  }
+
+  /**
+   * ゴール未解放時に出口開口へ格子ゲートを配置する。
+   */
+  private buildLockedGoalGate(): void {
+    if (this.goalActive) return;
+
+    const center = getGoalOpeningCenter(this.goalExit);
+    const gateMaterial = new THREE.MeshBasicMaterial({ color: GOAL_GATE_BAR_COLOR });
+    const isHorizontalOpening = this.goalExit.dir === 'N' || this.goalExit.dir === 'S';
+    const gateDepth = WORLD_WALL_THICKNESS * 0.72;
+    const gateHeight = WORLD_WALL_HEIGHT * 0.9;
+    const horizontalSpan = WORLD_CELL_SIZE * 0.9;
+    const spacing = horizontalSpan / (GOAL_GATE_BAR_COUNT + 1);
+
+    for (let i = 1; i <= GOAL_GATE_BAR_COUNT; i++) {
+      const offset = -horizontalSpan / 2 + spacing * i;
+      const verticalBar = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          isHorizontalOpening ? GOAL_GATE_BAR_THICKNESS : gateDepth,
+          gateHeight,
+          isHorizontalOpening ? gateDepth : GOAL_GATE_BAR_THICKNESS
+        ),
+        gateMaterial
+      );
+      verticalBar.position.set(
+        center.x + (isHorizontalOpening ? offset : 0),
+        WORLD_FLOOR_Y + gateHeight / 2,
+        center.z + (isHorizontalOpening ? 0 : offset)
+      );
+      verticalBar.userData.kind = 'goal-gate';
+      this.root.add(verticalBar);
+    }
+
+    const horizontalBarHeights = [0.35, 0.7];
+    horizontalBarHeights.forEach((heightRate) => {
+      const horizontalBar = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          isHorizontalOpening ? horizontalSpan : gateDepth,
+          GOAL_GATE_BAR_THICKNESS,
+          isHorizontalOpening ? gateDepth : horizontalSpan
+        ),
+        gateMaterial
+      );
+      horizontalBar.position.set(
+        center.x,
+        WORLD_FLOOR_Y + WORLD_WALL_HEIGHT * heightRate,
+        center.z
+      );
+      horizontalBar.userData.kind = 'goal-gate';
+      this.root.add(horizontalBar);
+    });
   }
 }
 

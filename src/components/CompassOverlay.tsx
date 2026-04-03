@@ -1,4 +1,3 @@
-import React from 'react';
 import { Direction } from '../mazeUtils';
 
 // CompassOverlayコンポーネントの入力プロパティ。

@@ -1,19 +1,20 @@
-import React from 'react';
 import {
-  GOAL,
   GOAL_ACTIVE_COLOR,
-  GOAL_ACTIVE_FLOOR_COLOR,
+  GOAL_EXIT_MARKER_OFFSET_RATIO,
   GOAL_INACTIVE_COLOR,
-  GOAL_INACTIVE_FLOOR_COLOR,
-  START,
+  HELP_MAP_CHECKPOINT_VISIBILITY_MODE,
+  HELP_MAP_GOAL_VISIBILITY_MODE,
 } from '../game/constants';
 import { Checkpoint, toCheckpointKey } from '../game/checkpointUtils';
-import { Maze, PlayerState } from '../mazeUtils';
+import { HelpMapVisibilityPolicy } from '../game/helpMapVisibilityPolicy';
+import { GoalExit, Maze, PlayerState } from '../mazeUtils';
 
 // HelpMapコンポーネントの入力プロパティ。
 type HelpMapProps = {
   // 表示対象の迷路データ。
   maze: Maze;
+  // ゴール出口（セル座標と外向き方向）。
+  goalExit: GoalExit;
   // プレイヤー現在位置と向き。
   player: PlayerState;
   // 全チェックポイント座標。
@@ -26,27 +27,33 @@ type HelpMapProps = {
   revealHiddenMapForDebug: boolean;
   // ゴールが有効化済みかどうか。
   goalActive: boolean;
+  // クリア済みかどうか。
+  finished: boolean;
 };
 
 /**
  * ヘルプ用の2D俯瞰マップを描画する。
  * @param maze 迷路全体データ
+ * @param goalExit ゴール出口（セル座標と外向き方向）
  * @param player プレイヤー位置と向き
  * @param checkpoints 全チェックポイント座標
  * @param passedCheckpointKeys 通過済みチェックポイント座標キー集合
  * @param visitedCellKeys 訪問済みセル座標キー集合
  * @param revealHiddenMapForDebug 未訪問領域を表示するデバッグフラグ
  * @param goalActive ゴール有効化状態
- * @returns 壁線・S/G・プレイヤー向きを描いたSVG
+ * @param finished クリア済み状態
+ * @returns 壁線・チェックポイント・ゴール・プレイヤー向きを描いたSVG
  */
 export function HelpMap({
   maze,
+  goalExit,
   player,
   checkpoints,
   passedCheckpointKeys,
   visitedCellKeys,
   revealHiddenMapForDebug,
   goalActive,
+  finished,
 }: HelpMapProps) {
   // 1マスの描画サイズ（px）。
   const cellSize = 22;
@@ -78,6 +85,32 @@ export function HelpMap({
   const checkpointMap = new Map(
     checkpoints.map((checkpoint) => [toCheckpointKey(checkpoint.x, checkpoint.y), checkpoint])
   );
+  // ゴール表示を出口方向へ少しずらす量（px）。
+  const goalOffset = cellSize * GOAL_EXIT_MARKER_OFFSET_RATIO;
+  // ゴール出口セル中心X。
+  const goalCellCenterX = pad + goalExit.x * cellSize + cellSize / 2;
+  // ゴール出口セル中心Y。
+  const goalCellCenterY = pad + goalExit.y * cellSize + cellSize / 2;
+  // ゴール表示中心X（出口方向へオフセット）。
+  const goalMarkerX =
+    goalCellCenterX + (goalExit.dir === 'E' ? goalOffset : goalExit.dir === 'W' ? -goalOffset : 0);
+  // ゴール表示中心Y（出口方向へオフセット）。
+  const goalMarkerY =
+    goalCellCenterY + (goalExit.dir === 'S' ? goalOffset : goalExit.dir === 'N' ? -goalOffset : 0);
+  // ゴール出口に面した外周セルを通過済みかどうか。
+  const passedGoalEdgeCell = visitedCellKeys.has(toCheckpointKey(goalExit.x, goalExit.y));
+  // 表示可否判定をポリシークラスへ集約し、描画ロジックを簡潔に保つ。
+  const visibilityPolicy = new HelpMapVisibilityPolicy({
+    revealHiddenMapForDebug,
+    checkpointVisibilityMode: HELP_MAP_CHECKPOINT_VISIBILITY_MODE,
+    goalVisibilityMode: HELP_MAP_GOAL_VISIBILITY_MODE,
+  });
+  // 現在の設定に基づき、通常ヘルプマップでゴールを表示するか判定する。
+  const showGoalMarker = visibilityPolicy.shouldShowGoal({
+    passedGoalEdgeCell,
+    goalActive,
+    finished,
+  });
 
   /**
    * セルが訪問済み（またはデバッグ全表示）かを判定する。
@@ -113,11 +146,11 @@ export function HelpMap({
    * @returns 床塗り色。対象外セルはnull
    */
   const getCellFloorColor = (x: number, y: number): string | null => {
-    if (x === START.x && y === START.y) return 'rgba(140, 230, 255, 0.24)';
-    if (x === GOAL.x && y === GOAL.y) return goalActive ? GOAL_ACTIVE_FLOOR_COLOR : GOAL_INACTIVE_FLOOR_COLOR;
     const checkpoint = checkpointMap.get(toCheckpointKey(x, y));
     if (!checkpoint) return null;
     const passed = passedCheckpointKeys.has(toCheckpointKey(checkpoint.x, checkpoint.y));
+    // passed_only設定では未通過CPの床色も含めて非表示にする。
+    if (!visibilityPolicy.shouldShowCheckpoint(passed)) return null;
     return passed ? 'rgba(123, 181, 138, 0.24)' : 'rgba(255, 217, 140, 0.24)';
   };
 
@@ -142,7 +175,7 @@ export function HelpMap({
         })
       )}
       {maze.flatMap((row, y) =>
-        row.flatMap((cell, x) => {
+        row.flatMap((_, x) => {
           // 未訪問セルは非表示にし、通った道のみ表示する。
           if (!isCellRevealed(x, y)) return [];
           const x0 = pad + x * cellSize;
@@ -159,7 +192,10 @@ export function HelpMap({
       )}
       {checkpoints.map((checkpoint) => {
         // 各チェックポイントの通過状態を座標キーで判定する。
-        const passed = passedCheckpointKeys.has(toCheckpointKey(checkpoint.x, checkpoint.y));
+        const checkpointKey = toCheckpointKey(checkpoint.x, checkpoint.y);
+        const passed = passedCheckpointKeys.has(checkpointKey);
+        // 非デバッグ時は設定に応じて未通過チェックポイントを隠す。
+        if (!visibilityPolicy.shouldShowCheckpoint(passed)) return null;
         const cx = pad + checkpoint.x * cellSize + cellSize / 2;
         const cy = pad + checkpoint.y * cellSize + cellSize / 2;
         return (
@@ -184,43 +220,37 @@ export function HelpMap({
           </g>
         );
       })}
-      <rect
-        x={pad + START.x * cellSize + 4}
-        y={pad + START.y * cellSize + 4}
-        width={cellSize - 8}
-        height={cellSize - 8}
-        fill="none"
-        stroke="#8ce6ff"
-        strokeWidth={1.2}
-      />
-      <text
-        x={pad + START.x * cellSize + cellSize / 2}
-        y={pad + START.y * cellSize + cellSize / 2 + 4}
-        fill="#8ce6ff"
-        textAnchor="middle"
-        fontSize="12"
-      >
-        S
-      </text>
-      <rect
-        x={pad + GOAL.x * cellSize + 4}
-        y={pad + GOAL.y * cellSize + 4}
-        width={cellSize - 8}
-        height={cellSize - 8}
-        fill="none"
-        stroke={goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR}
-        strokeDasharray={goalActive ? undefined : '3 2'}
-        strokeWidth={1.2}
-      />
-      <text
-        x={pad + GOAL.x * cellSize + cellSize / 2}
-        y={pad + GOAL.y * cellSize + cellSize / 2 + 4}
-        fill={goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR}
-        textAnchor="middle"
-        fontSize="12"
-      >
-        G
-      </text>
+      {showGoalMarker && (
+        <>
+          <line
+            x1={goalCellCenterX}
+            y1={goalCellCenterY}
+            x2={goalMarkerX}
+            y2={goalMarkerY}
+            stroke={goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR}
+            strokeWidth={1.1}
+            strokeDasharray={goalActive ? undefined : '3 2'}
+          />
+          <circle
+            cx={goalMarkerX}
+            cy={goalMarkerY}
+            r={6.5}
+            fill="none"
+            stroke={goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR}
+            strokeWidth={1.2}
+            strokeDasharray={goalActive ? undefined : '3 2'}
+          />
+          <text
+            x={goalMarkerX}
+            y={goalMarkerY + 4}
+            fill={goalActive ? GOAL_ACTIVE_COLOR : GOAL_INACTIVE_COLOR}
+            textAnchor="middle"
+            fontSize="12"
+          >
+            G
+          </text>
+        </>
+      )}
       <polygon points={playerTriangle} fill="#ffd98c" stroke="#ffe8be" strokeWidth={1} />
     </svg>
   );

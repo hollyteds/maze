@@ -20,6 +20,27 @@ export const RIGHT_OF: Record<Direction, Direction> = {
 const DIRECTION_ORDER: Direction[] = ['N', 'E', 'S', 'W'];
 
 /**
+ * 向きに応じた前方1マスの座標を計算する。
+ * @param x 現在セルX座標
+ * @param y 現在セルY座標
+ * @param dir 現在向き（N/E/S/W）
+ * @returns 前方1マスの座標
+ */
+export const getForwardPosition = (
+  x: number,
+  y: number,
+  dir: Direction
+): { x: number; y: number } => {
+  let nextX = x;
+  let nextY = y;
+  if (dir === 'N') nextY -= 1;
+  if (dir === 'E') nextX += 1;
+  if (dir === 'S') nextY += 1;
+  if (dir === 'W') nextX -= 1;
+  return { x: nextX, y: nextY };
+};
+
+/**
  * プレイヤーの向きを左右90度回転させる。
  * @param dir 現在向き（N/E/S/W）
  * @param turn 回転方向（left/right）
@@ -41,12 +62,9 @@ export const moveForward = (player: PlayerState, maze: Maze): PlayerState => {
   // 進行方向に壁がある場合は移動できない。
   if (maze[y][x].walls[dir]) return player;
 
-  let nextX = x;
-  let nextY = y;
-  if (dir === 'N') nextY -= 1;
-  if (dir === 'E') nextX += 1;
-  if (dir === 'S') nextY += 1;
-  if (dir === 'W') nextX -= 1;
+  const next = getForwardPosition(x, y, dir);
+  const nextX = next.x;
+  const nextY = next.y;
 
   if (nextX < 0 || nextX >= maze[0].length || nextY < 0 || nextY >= maze.length) {
     return player;
