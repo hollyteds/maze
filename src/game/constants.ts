@@ -63,8 +63,8 @@ export const ENABLE_WALL_DEBUG_LOG = false;
 
 // 3Dビューの横幅（px）。UIレイアウトとキャンバスサイズの基準になる。
 export const VIEWPORT_WIDTH = 760;
-// 3Dビューの縦幅（px）。UIレイアウトとキャンバスサイズの基準になる。
-export const VIEWPORT_HEIGHT = 380;
+// 3Dビューの縦幅（px）。現行の2:1レイアウトを維持するため横幅から導出する。
+export const VIEWPORT_HEIGHT = VIEWPORT_WIDTH / 2;
 // タッチの横スワイプを回転入力として扱う最小移動量（px）。小さくすると誤回転が増える。
 export const TOUCH_SWIPE_TURN_THRESHOLD_PX = 24;
 // タップ判定で許容する最大移動量（px）。大きくするとスワイプ誤判定が増える。
@@ -79,18 +79,28 @@ export const TOUCH_OVERLAY_BOTTOM_PADDING_PX = 16;
 export const TOUCH_LANDSCAPE_PROMPT_TEXT = '横向きにしてプレイしてください';
 // タッチ全画面UIのステータス表示レイヤー。ポップアップより背面に固定する。
 export const TOUCH_STATUS_OVERLAY_Z_INDEX = 12;
-// タッチ全画面UIのアクションボタン既定レイヤー。通常時はポップアップ背面に置く。
-export const TOUCH_ACTION_BUTTON_BASE_Z_INDEX = 14;
-// マップ表示オーバーレイのレイヤー。
-export const TOUCH_MAP_OVERLAY_Z_INDEX = 20;
+// タッチ全画面UIのアクションボタン既定レイヤー。通常時はステータスより前面に置く。
+export const TOUCH_ACTION_BUTTON_BASE_Z_INDEX = TOUCH_STATUS_OVERLAY_Z_INDEX + 2;
+// マップ表示オーバーレイのレイヤー。通常ボタン群より十分前面へ上げる。
+export const TOUCH_MAP_OVERLAY_Z_INDEX = TOUCH_ACTION_BUTTON_BASE_Z_INDEX + 6;
+// タッチ全画面UIのRETRYボタンレイヤー。マップ本体より前面、専用ボタンより背面に置く。
+export const TOUCH_RETRY_BUTTON_Z_INDEX = TOUCH_MAP_OVERLAY_Z_INDEX + 2;
 // マップ表示中にMAPボタンだけ前面へ出すレイヤー。
-export const TOUCH_MAP_BUTTON_ACTIVE_Z_INDEX = 24;
-// 操作ヘルプ表示オーバーレイのレイヤー。
-export const TOUCH_HELP_OVERLAY_Z_INDEX = 30;
+export const TOUCH_MAP_BUTTON_ACTIVE_Z_INDEX = TOUCH_MAP_OVERLAY_Z_INDEX + 4;
+// 操作ヘルプ表示オーバーレイのレイヤー。マップ表示より優先して重ねる。
+export const TOUCH_HELP_OVERLAY_Z_INDEX = TOUCH_MAP_OVERLAY_Z_INDEX + 10;
 // 操作ヘルプ表示中にHELPボタンだけ前面へ出すレイヤー。
-export const TOUCH_HELP_BUTTON_ACTIVE_Z_INDEX = 34;
-// タッチ全画面UIのRETRYボタンレイヤー。
-export const TOUCH_RETRY_BUTTON_Z_INDEX = 22;
+export const TOUCH_HELP_BUTTON_ACTIVE_Z_INDEX = TOUCH_HELP_OVERLAY_Z_INDEX + 4;
+// コンパスの方位リング回転アニメーション時間（ms）。短くすると回転変化が急になる。
+export const COMPASS_ROTATION_DURATION_MS = 180;
+// コンパス方位表示（リング/十字/ラベル配置）の縮尺。1より小さくすると全体が縮小する。
+export const COMPASS_DIRECTION_SCALE = 1;
+// コンパス方位ラベルの文字サイズ（px）。可読性向上のため標準より大きめに設定する。
+export const COMPASS_LABEL_FONT_SIZE_PX = 15;
+// コンパス中央ポインター（三角形）の半幅（px）。値を上げると横幅が太くなる。
+export const COMPASS_POINTER_TRIANGLE_HALF_WIDTH = 5;
+// コンパス中央ポインター（三角形）の底辺位置比率。2.0で直径端、1.84はわずかに内側へ収める。
+export const COMPASS_POINTER_TRIANGLE_BASE_OFFSET_RATIO = 1.84;
 // 迷路ワイヤー/輪郭の基準色。
 export const LINE_COLOR = '#9df7b5';
 // ビュー外枠のグロー色。
@@ -160,8 +170,8 @@ export const WALL_PILLAR_SIZE = WORLD_WALL_THICKNESS * 1.16;
 export const GOAL_OPEN_PILLAR_COLOR = '#ff4a4a';
 // 柱テクスチャの横解像度。
 export const WALL_PILLAR_TEXTURE_WIDTH = 8;
-// 柱テクスチャの縦解像度。
-export const WALL_PILLAR_TEXTURE_HEIGHT = 128;
+// 柱テクスチャの縦解像度。縦長比率(16:1)を横解像度から導出して維持する。
+export const WALL_PILLAR_TEXTURE_HEIGHT = WALL_PILLAR_TEXTURE_WIDTH * 16;
 
 // 通常床の色。
 export const FLOOR_BASE_COLOR = '#05130d';
@@ -177,8 +187,8 @@ export const CHECKPOINT_PENDING_WALL_COLOR = '#8f7642';
 export const CHECKPOINT_CLEARED_WALL_COLOR = '#4f7660';
 // マーカー柱の半径。
 export const MARKER_RADIUS = 0.13;
-// マーカー柱の高さ。
-export const MARKER_HEIGHT = 0.24;
+// マーカー柱の高さ。壁高さに対する比率(30%)で管理し、スケール変更時の見え方を揃える。
+export const MARKER_HEIGHT = WORLD_WALL_HEIGHT * 0.3;
 
 // ========================================
 // ゴール出口ゲート

@@ -42,6 +42,8 @@ type HelpMapOverlayProps = {
   background: string;
   zIndex: number;
   footerText?: string;
+  maxMapWidthPx?: number;
+  maxMapHeightPx?: number;
 };
 
 /**
@@ -58,6 +60,8 @@ type HelpMapOverlayProps = {
  * @param background オーバーレイ背景色
  * @param zIndex 表示レイヤー順
  * @param footerText マップ下部補助テキスト
+ * @param maxMapWidthPx マップ表示最大横幅（px）
+ * @param maxMapHeightPx マップ表示最大縦幅（px）
  * @returns ヘルプマップオーバーレイ
  */
 function HelpMapOverlay({
@@ -73,6 +77,8 @@ function HelpMapOverlay({
   background,
   zIndex,
   footerText,
+  maxMapWidthPx,
+  maxMapHeightPx,
 }: HelpMapOverlayProps) {
   return (
     <div
@@ -97,6 +103,8 @@ function HelpMapOverlay({
           revealHiddenMapForDebug={revealHiddenMapForDebug}
           goalActive={goalActive}
           finished={finished}
+          maxDisplayWidthPx={maxMapWidthPx}
+          maxDisplayHeightPx={maxMapHeightPx}
         />
         {footerText ? (
           <p style={{ marginTop: 10, marginBottom: 0, fontSize: 13, color: '#cbffd9' }}>{footerText}</p>
@@ -216,9 +224,14 @@ export default function MazeGame() {
     return (
       <div
         style={{
+          position: 'fixed',
+          inset: 0,
           color: '#9df7b5',
           background: '#020503',
+          width: '100%',
           height: '100dvh',
+          overflow: 'hidden',
+          boxSizing: 'border-box',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -241,11 +254,14 @@ export default function MazeGame() {
     return (
       <div
         style={{
+          position: 'fixed',
+          inset: 0,
           color: '#9df7b5',
           background: '#020503',
-          width: '100vw',
+          width: '100%',
           height: '100dvh',
           overflow: 'hidden',
+          boxSizing: 'border-box',
           fontFamily: BASE_FONT_FAMILY,
         }}
       >
@@ -278,6 +294,8 @@ export default function MazeGame() {
               finished={finished}
               background="rgba(2, 5, 3, 0.9)"
               zIndex={TOUCH_MAP_OVERLAY_Z_INDEX}
+              maxMapWidthPx={Math.max(80, viewportSize.width - 24)}
+              maxMapHeightPx={Math.max(80, viewportSize.height - 24)}
             />
           ) : null}
           {showTouchHelpDialog ? (
@@ -385,11 +403,11 @@ export default function MazeGame() {
         background: '#020503',
         minHeight: '100vh',
         textAlign: 'center',
-        padding: 20,
+        paddingInline: 20,
         fontFamily: BASE_FONT_FAMILY,
       }}
     >
-      <h1 style={{ letterSpacing: 2, marginBottom: 14 }}>3D MAZE</h1>
+      <h1 style={{ letterSpacing: 2, margin: 0, paddingBlock: 14  }}>3D MAZE</h1>
       <div
         style={{
           position: 'relative',

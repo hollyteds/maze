@@ -5,8 +5,12 @@ React + TypeScript + Three.js で実装した、一人称視点の 3D 迷路ゲ�
 
 ## 動作環境
 
-- Node.js 18 以上（推奨）
+- Node.js 22 LTS 以上（推奨）
 - npm 9 以上（推奨）
+
+補足:
+- Node.js 23 系は一部依存パッケージで `EBADENGINE` 警告が出る場合があります。
+- 警告を避ける場合は Node.js 22 系または 24 系を利用してください。
 
 ## セットアップ
 
@@ -92,11 +96,20 @@ npm run preview
 - `CHECKPOINT`: 通過数 / 総数
 - `CLEAR`: クリア時に表示
 - `CP STATUS`: チェックポイントごとの到達状態（番号 + `✓`）
+- `COMPASS`: 針（三角形）は固定で、方位リング側がイージング付きで回転
 
 ## 設定変更
 
 主要な仕様値は `src/game/constants.ts` に集約しています。  
 迷路サイズ、カメラ、色、ゲート、メッセージ、ヘルプ可視化モードをここで調整できます。
+
+現行では一部の値を他定数から導出しており、関連値の同期ズレを防ぎます。
+
+- `VIEWPORT_HEIGHT = VIEWPORT_WIDTH / 2`
+- `TOUCH_*_Z_INDEX` は `TOUCH_STATUS_OVERLAY_Z_INDEX` 基準の段階式
+- `WALL_PILLAR_TEXTURE_HEIGHT = WALL_PILLAR_TEXTURE_WIDTH * 16`
+- `MARKER_HEIGHT = WORLD_WALL_HEIGHT * 0.3`
+- コンパス三角形底辺位置は `COMPASS_POINTER_TRIANGLE_BASE_OFFSET_RATIO` で調整
 
 ## 実装メモ（可読性改善）
 

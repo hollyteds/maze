@@ -29,6 +29,10 @@ type HelpMapProps = {
   goalActive: boolean;
   // クリア済みかどうか。
   finished: boolean;
+  // 表示可能な最大横幅（px）。指定時は比率維持で縮小する。
+  maxDisplayWidthPx?: number;
+  // 表示可能な最大縦幅（px）。指定時は比率維持で縮小する。
+  maxDisplayHeightPx?: number;
 };
 
 /**
@@ -42,6 +46,8 @@ type HelpMapProps = {
  * @param revealHiddenMapForDebug 未訪問領域を表示するデバッグフラグ
  * @param goalActive ゴール有効化状態
  * @param finished クリア済み状態
+ * @param maxDisplayWidthPx 表示可能な最大横幅（px）
+ * @param maxDisplayHeightPx 表示可能な最大縦幅（px）
  * @returns 壁線・チェックポイント・ゴール・プレイヤー向きを描いたSVG
  */
 export function HelpMap({
@@ -54,6 +60,8 @@ export function HelpMap({
   revealHiddenMapForDebug,
   goalActive,
   finished,
+  maxDisplayWidthPx,
+  maxDisplayHeightPx,
 }: HelpMapProps) {
   // 1マスの描画サイズ（px）。
   const cellSize = 22;
@@ -67,6 +75,15 @@ export function HelpMap({
   const width = mapWidth + pad * 2;
   // SVG全体の縦幅（余白込み）。
   const height = mapHeight + pad * 2;
+  // 指定された表示上限に合わせた縮小率。未指定時は等倍表示。
+  const widthScale = maxDisplayWidthPx ? maxDisplayWidthPx / width : 1;
+  const heightScale = maxDisplayHeightPx ? maxDisplayHeightPx / height : 1;
+  // 比率を崩さないよう縦横の最小縮小率を適用し、拡大はしない。
+  const displayScale = Math.min(1, widthScale, heightScale);
+  // 実表示横幅（px）。
+  const displayWidth = width * displayScale;
+  // 実表示縦幅（px）。
+  const displayHeight = height * displayScale;
 
   // プレイヤー三角形の中心X。
   const px = pad + player.x * cellSize + cellSize / 2;
@@ -155,7 +172,12 @@ export function HelpMap({
   };
 
   return (
-    <svg width={width} height={height} style={{ background: '#031109', border: '1px solid #58d47f' }}>
+    <svg
+      width={displayWidth}
+      height={displayHeight}
+      viewBox={`0 0 ${width} ${height}`}
+      style={{ background: '#031109', border: '1px solid #58d47f', display: 'block' }}
+    >
       <rect x={0} y={0} width={width} height={height} fill="#031109" />
       {maze.flatMap((row, y) =>
         row.map((_, x) => {

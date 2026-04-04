@@ -79,6 +79,8 @@
 - タッチ端末では `D` によるデバッグ開示操作を受け付けない。
 - タッチ全画面UIでは `HELP`（左下）で操作説明ポップアップ、`MAP`（右下）でヘルプマップを切り替える。
 - タッチ全画面UIの `TIME/GOAL/CHECKPOINT/CP STATUS` は画面最下部オーバーレイで表示する。
+- コンパスは針（三角形）を固定し、方位リング側を回転させる。
+- コンパス方位リングの回転はイージング付きで補間し、急激な見た目変化を抑える。
 
 ## 全体フロー
 
@@ -195,6 +197,8 @@ flowchart TD
 - `ResizeObserver` と `window.resize` で表示領域に追従してレンダラーサイズ/投影行列を更新する。
 - タッチ入力は `onTouchStart/onTouchEnd` で判定し、タップを前進、左右スワイプを回転へ変換する。
 - `fullScreen` プロップ時は親領域いっぱいにキャンバスを表示する。
+- コンパス表示（`CompassOverlay.tsx`）は `requestAnimationFrame` + `easeInOutCubic` で方位リング角を補間する。
+- コンパス三角形は上端を方位リング外周に合わせ、底辺位置は `COMPASS_POINTER_TRIANGLE_BASE_OFFSET_RATIO` で制御する。
 
 ## 主要関数一覧
 
@@ -290,11 +294,13 @@ flowchart TD
 
 ### カメラ・ビュー
 
-- `VIEWPORT_WIDTH`, `VIEWPORT_HEIGHT`: 3Dビューの描画領域サイズを決める。
+- `VIEWPORT_WIDTH`, `VIEWPORT_HEIGHT`: 3Dビューの描画領域サイズを決める（`VIEWPORT_HEIGHT = VIEWPORT_WIDTH / 2`）。
 - `CAMERA_MOVE_DURATION_MS`: 移動・回転時カメラ補間の所要時間を決める。
 - `TOUCH_SWIPE_TURN_THRESHOLD_PX`, `TOUCH_TAP_MOVE_TOLERANCE_PX`, `TOUCH_TAP_MAX_DURATION_MS`: タッチ入力を操作へ変換する判定しきい値を定義する。
 - `TOUCH_ACTION_BUTTON_SIZE_PX`, `TOUCH_OVERLAY_BOTTOM_PADDING_PX`, `TOUCH_LANDSCAPE_PROMPT_TEXT`: タッチ全画面UIの操作ボタン寸法・余白・縦向き案内文言を定義する。
-- `TOUCH_*_Z_INDEX` 群: タッチ全画面UIのステータス/ポップアップ/ボタンの前後関係を定義する。
+- `TOUCH_*_Z_INDEX` 群: タッチ全画面UIのステータス/ポップアップ/ボタンの前後関係を段階式で定義する。
+- `COMPASS_ROTATION_DURATION_MS`, `COMPASS_DIRECTION_SCALE`, `COMPASS_LABEL_FONT_SIZE_PX`: コンパス回転時間・方位表示縮尺・文字サイズを定義する。
+- `COMPASS_POINTER_TRIANGLE_HALF_WIDTH`, `COMPASS_POINTER_TRIANGLE_BASE_OFFSET_RATIO`: 固定三角形ポインターの形状を定義する。
 - `CAMERA_EYE_HEIGHT`, `CAMERA_PITCH_RAD`: 視点の高さと上下角（俯仰）を定義する。
 - `CAMERA_BACK_OFFSET`, `CAMERA_FOV_DEG`, `CAMERA_NEAR`, `CAMERA_FAR`: 視点後退量と投影パラメータ（画角・クリップ）を定義する。
 - `CAMERA_FOG_NEAR`, `CAMERA_FOG_FAR`: フォグの開始・終了距離を定義する。
@@ -304,11 +310,11 @@ flowchart TD
 - `WORLD_CELL_SIZE`, `WORLD_WALL_HEIGHT`, `WORLD_WALL_THICKNESS`: 迷路セル縮尺と壁形状（高さ・厚み）を決める。
 - `WORLD_FLOOR_Y`, `WORLD_FLOOR_ELEVATION`: 床面の基準高さとZ-fighting回避の微小オフセットを定義する。
 - `WALL_FILL_COLOR`, `WALL_EDGE_COLOR`: 壁本体と輪郭線の基準色を定義する。
-- `WALL_PILLAR_SIZE`, `WALL_PILLAR_TEXTURE_WIDTH`, `WALL_PILLAR_TEXTURE_HEIGHT`: 柱サイズと柱テクスチャ解像度を定義する。
+- `WALL_PILLAR_SIZE`, `WALL_PILLAR_TEXTURE_WIDTH`, `WALL_PILLAR_TEXTURE_HEIGHT`: 柱サイズと柱テクスチャ解像度を定義する（`HEIGHT = WIDTH * 16`）。
 - `FLOOR_BASE_COLOR`, `FLOOR_BASE_OPACITY`: 通常床の色と不透明度を定義する。
 - `CHECKPOINT_PENDING_COLOR`, `CHECKPOINT_CLEARED_COLOR`: CPマーカー/床の未通過・通過済み色を定義する。
 - `CHECKPOINT_PENDING_WALL_COLOR`, `CHECKPOINT_CLEARED_WALL_COLOR`: CPセルに面する壁強調色を定義する。
-- `MARKER_RADIUS`, `MARKER_HEIGHT`: CP円柱マーカーの寸法を定義する。
+- `MARKER_RADIUS`, `MARKER_HEIGHT`: CP円柱マーカーの寸法を定義する（`MARKER_HEIGHT = WORLD_WALL_HEIGHT * 0.3`）。
 
 ### ゴール演出
 
